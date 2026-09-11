@@ -1,0 +1,72 @@
+//@version=6
+strategy(title="BB Squeeze Breakout Strategy", shorttitle="BB Squeeze Strategy", overlay=true,
+     initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=20,
+     commission_type=strategy.commission.percent, commission_value=0.1, slippage=1,
+     calc_on_every_tick=false)
+
+TT_LENGTH  = "The time period to be used in calculating the MA which creates the base for the Upper and Lower Bands."
+TT_MA_TYPE = "Determines the type of Moving Average that is applied to the basis plot line."
+TT_SOURCE  = "Determines what data from each bar will be used in calculations."
+TT_MULT    = "The number of Standard Deviations away from the MA that the Upper and Lower Bands should be."
+TT_DIFF    = "Bands are considered 'squeezed' when BandWidth (as a % of price) drops below this value."
+
+length = input.int(20,       "Length", minval = 1, tooltip = TT_LENGTH)
+maType = input.string("SMA", "Basis MA Type", options = ["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], tooltip = TT_MA_TYPE)
+src =    input(close,        "Source", tooltip = TT_SOURCE)
+mult =   input.float(2.0,    "StdDev", minval = 0.001, maxval = 50, tooltip = TT_MULT)
+diffThreshold = input.float(2.0, "Squeeze Threshold (BandWidth %)", minval = 0.01, tooltip = TT_DIFF)
+
+allowShorts       = input.bool(false, "Allow Short Entries", group = "Direction")
+exitOnBasisCross  = input.bool(true,  "Exit when price crosses back over Basis", group = "Exit")
+useStopLoss       = input.bool(true,  "Use Stop Loss %",   group = "Exit")
+stopLossPct       = input.float(5.0,  "Stop Loss %",   minval = 0.1, group = "Exit")
+useTakeProfit     = input.bool(false, "Use Take Profit %", group = "Exit")
+takeProfitPct     = input.float(10.0, "Take Profit %", minval = 0.1, group = "Exit")
+
+startDate = input.time(timestamp("2020-01-01"), "Backtest Start Date", group = "Backtest Window")
+endDate   = input.time(timestamp("2099-01-01"), "Backtest End Date",   group = "Backtest Window")
+inWindow  = time >= startDate and time <= endDate
+
+ma(source, length, _type) =>
+    switch _type
+        "SMA" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        "SMMA (RMA)" => ta.rma(source, length)
+        "WMA" => ta.wma(source, length)
+        "VWMA" => ta.vwma(source, length)
+
+basis = ma(src, length, maType)
+dev = mult * ta.stdev(src, length)
+upper = basis + dev
+lower = basis - dev
+bandWidthPct = (upper - lower) / basis * 100
+squeezeActive = bandWidthPct < diffThreshold
+
+longCondition  = inWindow and squeezeActive and ta.crossover(close, basis)
+shortCondition = inWindow and allowShorts and squeezeActive and ta.crossunder(close, basis)
+
+if longCondition
+    strategy.entry("Long", strategy.long)
+
+if shortCondition
+    strategy.entry("Short", strategy.short)
+
+if exitOnBasisCross
+    if ta.crossunder(close, basis)
+        strategy.close("Long")
+    if ta.crossover(close, basis)
+        strategy.close("Short")
+
+if useStopLoss or useTakeProfit
+    longStop  = useStopLoss   ? strategy.position_avg_price * (1 - stopLossPct / 100)   : na
+    longLimit = useTakeProfit ? strategy.position_avg_price * (1 + takeProfitPct / 100) : na
+    shortStop  = useStopLoss   ? strategy.position_avg_price * (1 + stopLossPct / 100)   : na
+    shortLimit = useTakeProfit ? strategy.position_avg_price * (1 - takeProfitPct / 100) : na
+    strategy.exit("Long Exit",  from_entry = "Long",  stop = longStop,  limit = longLimit)
+    strategy.exit("Short Exit", from_entry = "Short", stop = shortStop, limit = shortLimit)
+
+plot(basis, "Basis", color = #2962FF)
+p1 = plot(upper, "Upper", color = #F23645)
+p2 = plot(lower, "Lower", color = #089981)
+fill(p1, p2, title = "Background", color = color.rgb(33, 150, 243, 95))
+bgcolor(squeezeActive ? color.new(color.yellow, 85) : na, title = "Squeeze Zone")
