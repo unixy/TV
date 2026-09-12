@@ -23,8 +23,10 @@ maxCandidates  = input.int(300, "Max Tracked Candidates", minval = 20, tooltip =
 
 allowShorts       = input.bool(false, "Allow Short Entries", group = "Direction")
 exitOnBandCross   = input.bool(true,  "Exit when price crosses opposite Band (Upper for Long / Lower for Short)", group = "Exit")
-exitOnSlopeChange = input.bool(false, "Exit when opposite Band's slope accelerates (Upper rising faster for Long / Lower falling faster for Short)", group = "Exit")
+exitOnSlopeChange = input.bool(false, "Exit when opposite Band's slope angle exceeds threshold (Upper for Long / Lower for Short)", group = "Exit")
 slopeLength       = input.int(3, "Slope Lookback (bars)", minval = 1, tooltip = "Band slope is measured as the net change in the band's value over this many bars, smoothed to avoid bar-to-bar noise.", group = "Exit")
+angleThresholdDeg = input.float(45.0, "Slope Angle Threshold (degrees)", minval = 0.0, maxval = 89.9, tooltip = "Exit once the band's angle (normalized by ATR, so it's comparable across symbols/price levels) exceeds this many degrees of steepness.", group = "Exit")
+atrLength         = input.int(14, "ATR Length (for angle normalization)", minval = 1, group = "Exit")
 useStopLoss       = input.bool(true,  "Use Stop Loss %",   group = "Exit")
 stopLossPct       = input.float(5.0,  "Stop Loss %",   minval = 0.1, group = "Exit")
 useTakeProfit     = input.bool(false, "Use Take Profit %", group = "Exit")
@@ -88,13 +90,17 @@ if shortCondition
     strategy.entry("Short", strategy.short)
 
 // Slope = net change in the band's own value over `slopeLength` bars (smoothed,
-// not a raw 1-bar diff, which is too noisy for this). "Increasing"/"decreasing"
-// compares that slope reading to its own previous reading, i.e. acceleration
-// of the band, not just its direction.
-upperSlope = upper - upper[slopeLength]
-lowerSlope = lower - lower[slopeLength]
-upperSlopeIncreasing = upperSlope > upperSlope[1]
-lowerSlopeDecreasing = lowerSlope < lowerSlope[1]
+// not a raw 1-bar diff, which is too noisy for this), converted to a per-bar rate.
+// Dividing by ATR before taking the arctangent puts the slope in "ATRs per bar"
+// units first, so a given angle threshold means roughly the same steepness
+// regardless of the symbol's price level or volatility regime.
+atrVal = ta.atr(atrLength)
+upperSlopePerBar = (upper - upper[slopeLength]) / slopeLength
+lowerSlopePerBar = (lower - lower[slopeLength]) / slopeLength
+upperAngleDeg = not na(atrVal) and atrVal != 0 ? math.todegrees(math.atan(upperSlopePerBar / atrVal)) : na
+lowerAngleDeg = not na(atrVal) and atrVal != 0 ? math.todegrees(math.atan(lowerSlopePerBar / atrVal)) : na
+upperSlopeSteep = not na(upperAngleDeg) and upperAngleDeg > angleThresholdDeg
+lowerSlopeSteep = not na(lowerAngleDeg) and lowerAngleDeg < -angleThresholdDeg
 
 if exitOnBandCross
     if ta.crossover(close, upper)
@@ -103,9 +109,9 @@ if exitOnBandCross
         strategy.close("Short")
 
 if exitOnSlopeChange
-    if upperSlopeIncreasing
+    if upperSlopeSteep
         strategy.close("Long")
-    if lowerSlopeDecreasing
+    if lowerSlopeSteep
         strategy.close("Short")
 
 if useStopLoss or useTakeProfit
