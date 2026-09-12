@@ -23,6 +23,8 @@ maxCandidates  = input.int(300, "Max Tracked Candidates", minval = 20, tooltip =
 
 allowShorts       = input.bool(false, "Allow Short Entries", group = "Direction")
 exitOnBandCross   = input.bool(true,  "Exit when price crosses opposite Band (Upper for Long / Lower for Short)", group = "Exit")
+exitOnSlopeChange = input.bool(false, "Exit when opposite Band's slope accelerates (Upper rising faster for Long / Lower falling faster for Short)", group = "Exit")
+slopeLength       = input.int(3, "Slope Lookback (bars)", minval = 1, tooltip = "Band slope is measured as the net change in the band's value over this many bars, smoothed to avoid bar-to-bar noise.", group = "Exit")
 useStopLoss       = input.bool(true,  "Use Stop Loss %",   group = "Exit")
 stopLossPct       = input.float(5.0,  "Stop Loss %",   minval = 0.1, group = "Exit")
 useTakeProfit     = input.bool(false, "Use Take Profit %", group = "Exit")
@@ -85,10 +87,25 @@ if longCondition
 if shortCondition
     strategy.entry("Short", strategy.short)
 
+// Slope = net change in the band's own value over `slopeLength` bars (smoothed,
+// not a raw 1-bar diff, which is too noisy for this). "Increasing"/"decreasing"
+// compares that slope reading to its own previous reading, i.e. acceleration
+// of the band, not just its direction.
+upperSlope = upper - upper[slopeLength]
+lowerSlope = lower - lower[slopeLength]
+upperSlopeIncreasing = upperSlope > upperSlope[1]
+lowerSlopeDecreasing = lowerSlope < lowerSlope[1]
+
 if exitOnBandCross
     if ta.crossover(close, upper)
         strategy.close("Long")
     if ta.crossunder(close, lower)
+        strategy.close("Short")
+
+if exitOnSlopeChange
+    if upperSlopeIncreasing
+        strategy.close("Long")
+    if lowerSlopeDecreasing
         strategy.close("Short")
 
 if useStopLoss or useTakeProfit
