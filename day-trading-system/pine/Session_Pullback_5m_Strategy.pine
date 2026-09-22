@@ -1,0 +1,308 @@
+//@version=6
+strategy(title = "Session Pullback 5m (SPS) Strategy", shorttitle = "SPS Strategy", overlay = true,
+     initial_capital = 25000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 0,
+     commission_type = strategy.commission.cash_per_order, commission_value = 1.0,
+     slippage = 2, pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = true,
+     max_labels_count = 200, max_lines_count = 200)
+// process_orders_on_close=true: entries and the hard time-stop flatten fill
+// at the close of the signal/decision bar rather than the next bar's open.
+// This is a simplification (real fills will slip a little beyond the
+// `slippage` setting above) but it's what makes "flat at the end of the
+// block, right then and there" actually mean the block's own close, and it
+// keeps this script's fills directly comparable to the Python backtester.
+
+// ============================================================================
+// Session Pullback System - backtestable strategy version.
+// Same signal rules as Session_Pullback_5m_Indicator.pine; see
+// day-trading-system/PLAYBOOK.md for the full rule set and the reasoning
+// behind every default. This script is deliberately conservative:
+// small fixed risk per trade, hard daily/weekly loss circuit breakers, a
+// consecutive-loss breaker per session block, and a hard time-stop that
+// flattens the position at the end of every 4-hour block regardless of P&L.
+// Backtest results are only as good as the commission/slippage inputs below -
+// set them to match your actual venue before trusting any output.
+// ============================================================================
+
+// ---------------- Bias (4H) ----------------
+biasTf        = input.timeframe("240", "Bias Timeframe", group = "Bias Filter")
+emaFastLen    = input.int(20, "Bias EMA Fast", minval = 1, group = "Bias Filter")
+emaSlowLen    = input.int(50, "Bias EMA Slow", minval = 1, group = "Bias Filter")
+minSepAtrMult = input.float(0.15, "Min EMA Separation (x 4H ATR)", minval = 0.0, step = 0.05, group = "Bias Filter")
+
+// ---------------- Setup ----------------
+pivotLen         = input.int(3, "Pivot Lookback (bars each side)", minval = 1, group = "Setup")
+fib382           = input.float(0.382, "Fib Zone Near Edge", minval = 0.0, maxval = 1.0, group = "Setup")
+fib618           = input.float(0.618, "Fib Zone Far Edge", minval = 0.0, maxval = 1.0, group = "Setup")
+zoneTouchWindow  = input.int(6, "Zone Touch Validity (bars)", minval = 1, group = "Setup")
+ema21Len         = input.int(21, "Confluence EMA", minval = 1, group = "Setup")
+confluenceAtrMul = input.float(0.5, "Confluence Tolerance (x 5m ATR)", minval = 0.05, step = 0.05, group = "Setup")
+
+// ---------------- Trigger ----------------
+rsiLen      = input.int(14, "RSI Length", minval = 1, group = "Trigger")
+rsiTrigger  = input.float(45, "RSI Reclaim Level", minval = 1, maxval = 99, group = "Trigger")
+volMaLen    = input.int(20, "Volume MA Length", minval = 1, group = "Trigger")
+
+// ---------------- Session Block ----------------
+sessionStartHour = input.int(9, "Block Anchor Hour (0-23)", minval = 0, maxval = 23, group = "Session Block")
+sessionStartMin  = input.int(30, "Block Anchor Minute", minval = 0, maxval = 55, step = 5, group = "Session Block")
+sessionTz        = input.string(syminfo.timezone, "Session Timezone", group = "Session Block")
+blockLenMin       = 240
+noTradeOpenMin    = input.int(10, "No New Entries: First N Minutes of Block", minval = 0, group = "Session Block")
+noTradeCloseMin   = input.int(20, "No New Entries: Last N Minutes of Block", minval = 0, group = "Session Block")
+maxTradesPerBlock = input.int(2, "Max Entries per Block", minval = 1, maxval = 10, group = "Session Block")
+
+// ---------------- Volatility Filter ----------------
+atrLen        = input.int(14, "ATR Length (5m)", minval = 1, group = "Volatility Filter")
+pctLookback   = input.int(1000, "ATR% Percentile Lookback (bars)", minval = 50, group = "Volatility Filter")
+lowPctile     = input.float(10, "Skip Below This Percentile", minval = 0, maxval = 100, group = "Volatility Filter")
+highPctile    = input.float(97.5, "Skip Above This Percentile", minval = 0, maxval = 100, group = "Volatility Filter")
+
+// ---------------- Risk Management ----------------
+allowShorts        = input.bool(true, "Allow Short Entries", group = "Risk Management")
+riskPctPerTrade    = input.float(0.4, "Risk per Trade (% of equity)", minval = 0.01, maxval = 0.5, step = 0.05,
+     tooltip = "Hard ceiling in this system is 0.5%. Do not raise this without live evidence the edge supports it.", group = "Risk Management")
+allowFractional    = input.bool(false, "Allow Fractional Position Size", tooltip = "Off = whole shares/contracts (equities/futures). Turn on for crypto/forex.", group = "Risk Management")
+minRR              = input.float(1.5, "Minimum Reward:Risk to Enter", minval = 1.0, step = 0.1, group = "Risk Management")
+targetRMultiple    = input.float(2.0, "Target (R multiples)", minval = 1.0, step = 0.1, group = "Risk Management")
+beTriggerR         = input.float(1.0, "Move Stop to Breakeven at (R)", minval = 0.1, step = 0.1, group = "Risk Management")
+partialAtBE        = input.bool(true, "Take Partial Profit at Breakeven Trigger", group = "Risk Management")
+partialPct         = input.float(50, "Partial Close (%)", minval = 10, maxval = 90, group = "Risk Management")
+dailyLossLimitPct  = input.float(1.2, "Daily Loss Limit (% of equity)", minval = 0.1, maxval = 5.0, group = "Risk Management")
+weeklyLossLimitPct = input.float(3.0, "Weekly Loss Limit (% of equity)", minval = 0.1, maxval = 10.0, group = "Risk Management")
+consecLossBreaker  = input.int(2, "Consecutive Losses -> Stop for Block", minval = 1, maxval = 10, group = "Risk Management")
+
+startDate = input.time(timestamp("2020-01-01"), "Backtest Start Date", group = "Backtest Window")
+endDate   = input.time(timestamp("2099-01-01"), "Backtest End Date", group = "Backtest Window")
+inWindow  = time >= startDate and time <= endDate
+
+// ============================================================================
+// Bias
+// ============================================================================
+[biasEmaFast, biasEmaSlow, biasAtr, biasClose] = request.security(syminfo.tickerid, biasTf,
+     [ta.ema(close, emaFastLen), ta.ema(close, emaSlowLen), ta.atr(14), close], lookahead = barmerge.lookahead_off)
+
+emaSepAtr   = biasAtr != 0 ? (biasEmaFast - biasEmaSlow) / biasAtr : na
+biasBullish = biasEmaFast > biasEmaSlow and biasClose > biasEmaFast and emaSepAtr > minSepAtrMult
+biasBearish = biasEmaFast < biasEmaSlow and biasClose < biasEmaFast and emaSepAtr < -minSepAtrMult
+
+// ============================================================================
+// Session block bookkeeping
+// ============================================================================
+hNow = hour(time, sessionTz)
+mNow = minute(time, sessionTz)
+minutesSinceAnchor0 = (hNow * 60 + mNow) - (sessionStartHour * 60 + sessionStartMin)
+minutesSinceAnchor  = minutesSinceAnchor0 < 0 ? minutesSinceAnchor0 + 1440 : minutesSinceAnchor0
+posInBlock  = minutesSinceAnchor % blockLenMin
+newBlock    = posInBlock == 0
+noTradeWindow = posInBlock < noTradeOpenMin or posInBlock >= (blockLenMin - noTradeCloseMin)
+
+var int tradesThisBlockCount  = 0
+var int consecLossesThisBlock = 0
+if newBlock
+    tradesThisBlockCount  := 0
+    consecLossesThisBlock := 0
+
+// ============================================================================
+// Session VWAP (resets each 4h block)
+// ============================================================================
+var float cumPV  = 0.0
+var float cumVol = 0.0
+if newBlock
+    cumPV  := 0.0
+    cumVol := 0.0
+cumPV  += hlc3 * volume
+cumVol += volume
+vwapSession = cumVol > 0 ? cumPV / cumVol : na
+
+emaConfluence = ta.ema(close, ema21Len)
+atr5 = ta.atr(atrLen)
+
+// ============================================================================
+// Volatility filter
+// ============================================================================
+atrPct = atr5 / close * 100
+volPercentile = ta.percentrank(atrPct, pctLookback)
+volOk = volPercentile >= lowPctile and volPercentile <= highPctile
+
+// ============================================================================
+// Pivot-based impulse leg tracking
+// ============================================================================
+pivHigh = ta.pivothigh(pivotLen, pivotLen)
+pivLow  = ta.pivotlow(pivotLen, pivotLen)
+
+var float lastPivLowPrice  = na
+var float lastPivHighPrice = na
+var float runUpHigh   = na
+var float runDownLow  = na
+
+if not na(pivLow)
+    lastPivLowPrice := pivLow
+    runUpHigh       := ta.highest(high, pivotLen + 1)
+else
+    runUpHigh := math.max(nz(runUpHigh, high), high)
+
+if not na(pivHigh)
+    lastPivHighPrice := pivHigh
+    runDownLow       := ta.lowest(low, pivotLen + 1)
+else
+    runDownLow := math.min(nz(runDownLow, low), low)
+
+legUpValid   = not na(lastPivLowPrice) and not na(runUpHigh) and runUpHigh > lastPivLowPrice
+legDownValid = not na(lastPivHighPrice) and not na(runDownLow) and lastPivHighPrice > runDownLow
+
+fibZoneLongHi = legUpValid ? runUpHigh - (runUpHigh - lastPivLowPrice) * fib382 : na
+fibZoneLongLo = legUpValid ? runUpHigh - (runUpHigh - lastPivLowPrice) * fib618 : na
+fibZoneShortLo = legDownValid ? runDownLow + (lastPivHighPrice - runDownLow) * fib382 : na
+fibZoneShortHi = legDownValid ? runDownLow + (lastPivHighPrice - runDownLow) * fib618 : na
+
+touchedLongZone  = legUpValid and low <= fibZoneLongHi and low >= fibZoneLongLo
+touchedShortZone = legDownValid and high >= fibZoneShortLo and high <= fibZoneShortHi
+barsSinceLongTouch  = ta.barssince(touchedLongZone)
+barsSinceShortTouch = ta.barssince(touchedShortZone)
+longZoneFresh  = not na(barsSinceLongTouch) and barsSinceLongTouch <= zoneTouchWindow
+shortZoneFresh = not na(barsSinceShortTouch) and barsSinceShortTouch <= zoneTouchWindow
+
+confluenceOk = not na(vwapSession) and (math.abs(close - vwapSession) <= atr5 * confluenceAtrMul or math.abs(close - emaConfluence) <= atr5 * confluenceAtrMul)
+
+// ============================================================================
+// Trigger + trade-level stop/target (snapshotted at signal time)
+// ============================================================================
+rsiVal = ta.rsi(close, rsiLen)
+volMa  = ta.sma(volume, volMaLen)
+rsiReclaimUp   = ta.crossover(rsiVal, rsiTrigger)
+rsiReclaimDown = ta.crossunder(rsiVal, 100 - rsiTrigger)
+volOkBar = volume >= volMa
+
+longTrigger = inWindow and biasBullish and legUpValid and longZoneFresh and confluenceOk and not noTradeWindow and volOk and
+     close > fibZoneLongLo and close > open and rsiReclaimUp and volOkBar
+
+shortTrigger = inWindow and allowShorts and biasBearish and legDownValid and shortZoneFresh and confluenceOk and not noTradeWindow and volOk and
+     close < fibZoneShortHi and close < open and rsiReclaimDown and volOkBar
+
+structStopLong = legUpValid ? lastPivLowPrice - atr5 * 0.1 : na
+stopLong       = math.min(math.max(structStopLong, close - atr5 * 1.5), close - atr5 * 1.0)
+stopDistLong   = close - stopLong
+rrOkLong       = stopDistLong > 0 and (targetRMultiple >= minRR)
+
+structStopShort = legDownValid ? lastPivHighPrice + atr5 * 0.1 : na
+stopShort        = math.max(math.min(structStopShort, close + atr5 * 1.5), close + atr5 * 1.0)
+stopDistShort    = stopShort - close
+rrOkShort        = stopDistShort > 0 and (targetRMultiple >= minRR)
+
+// ============================================================================
+// Risk gates
+// ============================================================================
+var float dayStartEquity  = na
+var float weekStartEquity = na
+newDay  = ta.change(time("D")) != 0
+newWeek = ta.change(time("W")) != 0
+if newDay or na(dayStartEquity)
+    dayStartEquity := strategy.equity
+if newWeek or na(weekStartEquity)
+    weekStartEquity := strategy.equity
+
+dailyLossPct  = dayStartEquity > 0 ? (strategy.equity - dayStartEquity) / dayStartEquity * 100 : 0.0
+weeklyLossPct = weekStartEquity > 0 ? (strategy.equity - weekStartEquity) / weekStartEquity * 100 : 0.0
+dailyLossHit  = dailyLossPct <= -dailyLossLimitPct
+weeklyLossHit = weeklyLossPct <= -weeklyLossLimitPct
+
+canEnter = strategy.position_size == 0 and tradesThisBlockCount < maxTradesPerBlock and
+     consecLossesThisBlock < consecLossBreaker and not dailyLossHit and not weeklyLossHit
+
+// ============================================================================
+// Entries (risk-based sizing)
+// ============================================================================
+riskDollars = strategy.equity * riskPctPerTrade / 100
+
+var float pendingStop   = na
+var float pendingTarget = na
+
+if longTrigger and canEnter and rrOkLong
+    sizeRaw = riskDollars / stopDistLong
+    qty = allowFractional ? sizeRaw : math.floor(sizeRaw)
+    if qty > 0
+        strategy.entry("Long", strategy.long, qty = qty)
+        pendingStop   := stopLong
+        pendingTarget := close + stopDistLong * targetRMultiple
+        tradesThisBlockCount += 1
+
+if shortTrigger and canEnter and rrOkShort
+    sizeRaw = riskDollars / stopDistShort
+    qty = allowFractional ? sizeRaw : math.floor(sizeRaw)
+    if qty > 0
+        strategy.entry("Short", strategy.short, qty = qty)
+        pendingStop   := stopShort
+        pendingTarget := close - stopDistShort * targetRMultiple
+        tradesThisBlockCount += 1
+
+// ============================================================================
+// Position management: snapshot fill, breakeven + partial at 1R, exits
+// ============================================================================
+var float posEntryPrice   = na
+var float posStopPrice    = na
+var float posTargetPrice  = na
+var float posRDist        = na
+var bool  posBreakevenDone = false
+var bool  posPartialDone   = false
+
+justEntered = strategy.position_size != 0 and na(posEntryPrice)
+if justEntered
+    posEntryPrice := strategy.position_avg_price
+    posStopPrice  := pendingStop
+    posRDist      := math.max(math.abs(posEntryPrice - pendingStop), syminfo.mintick)
+    posTargetPrice := strategy.position_size > 0 ? posEntryPrice + posRDist * targetRMultiple : posEntryPrice - posRDist * targetRMultiple
+    posBreakevenDone := false
+    posPartialDone   := false
+
+if strategy.position_size != 0 and not na(posEntryPrice)
+    unrealizedR = strategy.position_size > 0 ? (close - posEntryPrice) / posRDist : (posEntryPrice - close) / posRDist
+
+    if unrealizedR >= beTriggerR and not posBreakevenDone
+        if partialAtBE and not posPartialDone
+            strategy.close(strategy.position_size > 0 ? "Long" : "Short", qty_percent = partialPct, comment = "Partial @ " + str.tostring(beTriggerR, "#.#") + "R")
+            posPartialDone := true
+        posStopPrice := posEntryPrice
+        posBreakevenDone := true
+
+    // Note: TradingView's broker emulator only checks a stop/limit order
+    // against bars AFTER the one that submitted it, so there's an
+    // unavoidable ~1-bar gap between a fill and this resting protection
+    // becoming active - a known Strategy Tester characteristic, not unique
+    // to this script. The Python backtester in python/ does not have this
+    // artifact; treat it as the more precise reference for exact fills and
+    // use this script for TradingView-native testing/paper validation.
+    strategy.exit("Long Exit", from_entry = "Long", stop = posStopPrice, limit = posTargetPrice, comment_loss = "Stop", comment_profit = "Target")
+    strategy.exit("Short Exit", from_entry = "Short", stop = posStopPrice, limit = posTargetPrice, comment_loss = "Stop", comment_profit = "Target")
+
+// Hard time-stop: flat at the end of every 4h block, win or lose, no exceptions.
+if newBlock and strategy.position_size != 0
+    strategy.close_all(comment = "Session End")
+
+if strategy.position_size == 0 and not na(posEntryPrice)
+    posEntryPrice := na
+    posStopPrice  := na
+    posTargetPrice := na
+    posRDist := na
+
+// ============================================================================
+// Consecutive-loss tracking (per block)
+// ============================================================================
+var int lastClosedCount = 0
+if strategy.closedtrades > lastClosedCount
+    lastProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastProfit < 0
+        consecLossesThisBlock += 1
+    else
+        consecLossesThisBlock := 0
+    lastClosedCount := strategy.closedtrades
+
+// ============================================================================
+// Plotting
+// ============================================================================
+plot(vwapSession, "Session VWAP", color = #FF6D00, linewidth = 2)
+plot(emaConfluence, "Confluence EMA", color = #2962FF)
+bgcolor(newBlock ? color.new(color.gray, 60) : na, title = "Session Block Boundary")
+bgcolor(dailyLossHit ? color.new(color.red, 85) : na, title = "Daily Loss Limit Hit")
+plotshape(longTrigger and canEnter, "Long Entry", style = shape.triangleup, location = location.belowbar, color = color.green, size = size.tiny)
+plotshape(shortTrigger and canEnter, "Short Entry", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)

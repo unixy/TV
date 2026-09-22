@@ -1,0 +1,4 @@
+results/
+synthetic_5m.csv
+__pycache__/
+*.pyc
