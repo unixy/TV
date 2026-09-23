@@ -14,13 +14,19 @@ price traded inside that bar**.
 
 | Element | Meaning |
 |---|---|
-| Box (body) | Q1 → Q3, the range holding the middle 50% of the bar's time |
+| Box (body) | 25th → 75th percentile (Q1 → Q3), the range holding the middle 50% of the bar's time |
 | Horizontal bar | Median: price spent half the bar above it and half below it |
-| Whiskers (wicks) | Furthest samples inside the Tukey fence (Q1 − 1.5·IQR, Q3 + 1.5·IQR) by default |
+| Whiskers (wicks) | 2nd → 98th percentile by default. Tukey 1.5·IQR and Min/Max are also available |
 | Orange dots | Outlier samples beyond the whiskers |
 | Gray × | The bar's true high/low when it lies beyond a whisker (a quick wick the samples missed) |
 
 Box color is green or red depending on whether the bar closed above or below its open.
+
+The defaults (closes sampled from a lower timeframe; percentiles 2/25/50/75/98) match
+the approach of the "Ori Candlesticks Box Plot" script on TradingView. Differences from it:
+the intrabar timeframe is picked automatically (no need to enter the TF ratio), the
+current bar updates live, a real median bar is drawn, and outliers, volume weighting and
+Tukey whiskers are available.
 
 ## Usage
 
@@ -35,7 +41,8 @@ Box color is green or red depending on whether the bar closed above or below its
   prices of every intrabar so intrabar wicks are included.
 - **Weighting**: `Time` (where price spent time) or `Volume` (where volume traded;
   uses weighted percentiles).
-- **Whisker method**: Tukey k×IQR, Percentile (e.g. 5th/95th), or Min/Max.
+- **Box percentile**: 25 gives the classic 25/75 box; lower values widen it.
+- **Whisker method**: Percentile (default 2 → 2nd/98th), Tukey k×IQR (textbook boxplot), or Min/Max.
 - **Median display**: the horizontal line is a drawing object, so TradingView keeps
   only the last 500. `Marker` mode shows the median on every bar.
 - Outlier dots are labels and are also capped at the last 500.
