@@ -17,6 +17,7 @@ price traded inside that bar**.
 | Box (body) | 25th → 75th percentile (Q1 → Q3), the range holding the middle 50% of the bar's time |
 | Horizontal bar | Median: price spent half the bar above it and half below it |
 | Whiskers (wicks) | 2nd → 98th percentile by default. Tukey 1.5·IQR and Min/Max are also available |
+| Dashed bar | Mean (average price, time- or volume-weighted), white by default |
 | Orange dots | Outlier samples beyond the whiskers, drawn as small text dots (• · or – ticks, size adjustable) |
 | Gray × | The bar's true high/low when it lies beyond a whisker (a quick wick the samples missed) |
 
@@ -45,6 +46,8 @@ Tukey whiskers are available.
 - **Whisker method**: Percentile (default 2 → 2nd/98th), Tukey k×IQR (textbook boxplot), or Min/Max.
 - **Median thickness**: the median is drawn as a flat, wickless candle, so it always
   matches the box width and position on every bar. 0 = hairline; raise it for a bolder bar.
+- **Mean**: drawn as a dashed glyph centred on the bar. Pine can't draw a dashed candle
+  body, so its width is fixed in pixels. Use the size setting to match your box width.
 - Outlier dots are labels, so TradingView keeps only the last 500.
 
 ## Limitations

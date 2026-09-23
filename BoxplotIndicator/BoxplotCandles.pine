@@ -48,8 +48,9 @@ dnColor       = input.color(color.new(#EF5350, 0), "Down box", group = GRP_STYLE
 boxTransp     = input.int(60,          "Box fill transparency", minval = 0, maxval = 100, group = GRP_STYLE)
 medColor      = input.color(color.new(color.yellow, 0), "Median", group = GRP_STYLE, inline = "m")
 medThick      = input.float(0.0,       "Thickness (% of box)", minval = 0.0, maxval = 25.0, step = 0.5, group = GRP_STYLE, inline = "m", tooltip = "0 = hairline. Larger values draw the median as a thin solid bar whose height is this % of the box height.")
-showMean      = input.bool(false,      "Show mean", group = GRP_STYLE, inline = "mean")
+showMean      = input.bool(true,       "Show mean (dashed)", group = GRP_STYLE, inline = "mean")
 meanColor     = input.color(color.new(color.white, 0), "", group = GRP_STYLE, inline = "mean")
+meanSize      = input.string("Normal", "Size", options = ["Small", "Normal", "Large", "Huge"], group = GRP_STYLE, inline = "mean", tooltip = "Pine cannot draw a dashed candle body, so the mean is a dashed glyph centred on the bar. Its width is fixed in pixels: pick the size that best matches your box width at your usual zoom.")
 showOutliers  = input.bool(true,       "Show outlier samples (last 500 labels)", group = GRP_STYLE, inline = "o")
 outColor      = input.color(color.new(color.orange, 0), "", group = GRP_STYLE, inline = "o")
 outMarker     = input.string("Dot", "Outlier marker", options = ["Dot", "Small dot", "Tick"], group = GRP_STYLE, inline = "om")
@@ -211,7 +212,13 @@ plotcandle(fb ? open : na, fb ? high : na, fb ? low : na, fb ? close : na, "Fall
 float medHalf = (q3 - q1) * medThick / 200.0
 plotcandle(med - medHalf, med + medHalf, med - medHalf, med + medHalf, "Median", color = medColor, wickcolor = color(na), bordercolor = medColor)
 
-plotshape(showMean ? mean : na, "Mean", shape.diamond, location.absolute, meanColor, size = size.tiny)
+// Mean as a dashed horizontal bar. plotchar is centred on the bar (unlike line
+// drawings, which can only sit on whole bars), so it stays aligned with the box.
+// Size must be a constant, hence one call per size.
+plotchar(showMean and meanSize == "Small"  ? mean : na, "Mean", "┅", location.absolute, meanColor, size = size.small,  editable = false)
+plotchar(showMean and meanSize == "Normal" ? mean : na, "Mean", "┅", location.absolute, meanColor, size = size.normal, editable = false)
+plotchar(showMean and meanSize == "Large"  ? mean : na, "Mean", "┅", location.absolute, meanColor, size = size.large,  editable = false)
+plotchar(showMean and meanSize == "Huge"   ? mean : na, "Mean", "┅", location.absolute, meanColor, size = size.huge,   editable = false)
 
 // Individual outlier samples (deduplicated to the tick).
 // Markers are plain text glyphs (no label bubble) so they stay small and unobtrusive.
