@@ -125,9 +125,13 @@ block if:
 Crypto trades every 5-minute bar around the clock, so a "20 trading day"
 lookback isn't 20 calendar days of bars the way it would be for a market
 that closes overnight and on weekends — 20 full calendar days of 5-minute
-bars is 20 × 288 = **5,760 bars**. That's the default lookback in the Pine
-scripts and the Python engine; shrink it if you want the filter to adapt
-faster to a changing volatility regime, at the cost of a noisier threshold.
+bars would be 20 × 288 = 5,760 bars. In practice the default lookback here
+is **4,800 bars (~17 calendar days)**, because TradingView's `ta.percentrank()`
+has a hard 5,000-bar limit — not a design choice, a platform ceiling. The
+Python engine has no such limit and could run a longer window, but it
+defaults to the same 4,800 so the two implementations stay comparable;
+shrink either one if you want the filter to adapt faster to a changing
+volatility regime, at the cost of a noisier threshold.
 
 ## 5. Setup: fibonacci pullback into VWAP/EMA confluence
 

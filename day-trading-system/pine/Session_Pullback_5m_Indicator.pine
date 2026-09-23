@@ -53,8 +53,8 @@ noTradeCloseMin   = input.int(20, "No New Entries: Last N Minutes of Block", min
 
 // ---------------- Volatility Filter ----------------
 atrLen        = input.int(14, "ATR Length (5m)", minval = 1, group = "Volatility Filter")
-pctLookback   = input.int(5760, "ATR% Percentile Lookback (bars)", minval = 50,
-     tooltip = "Crypto trades every 5m bar around the clock, so ~20 calendar days of 5m bars is 20 x 288 = 5760 bars (not ~1500, which was the equivalent for a market with fixed trading hours).", group = "Volatility Filter")
+pctLookback   = input.int(4800, "ATR% Percentile Lookback (bars)", minval = 50, maxval = 5000,
+     tooltip = "Crypto trades every 5m bar around the clock, so ~17 calendar days of 5m bars is 17 x 288 = 4800 bars (not ~1500, which was the equivalent for a market with fixed trading hours). Capped at 5000 - that's a hard limit of Pine's ta.percentrank(), not a choice.", group = "Volatility Filter")
 lowPctile     = input.float(10, "Skip Below This Percentile (dead market)", minval = 0, maxval = 100, group = "Volatility Filter")
 highPctile    = input.float(97.5, "Skip Above This Percentile (event/abnormal vol)", minval = 0, maxval = 100, group = "Volatility Filter")
 
