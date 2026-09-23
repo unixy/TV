@@ -1,0 +1,247 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+// Boxplot Candles
+//
+// Replaces each candlestick with a box-and-whisker plot of where price actually
+// traded INSIDE that bar. Every chart bar is broken into lower-timeframe
+// (intrabar) samples; those prices are treated as a distribution and the
+// classic five-number summary is drawn:
+//
+//   • Box            → interquartile range (Q1 … Q3): the middle 50% of the time
+//   • Median bar     → the price level where the bar spent half its time above
+//                      and half below
+//   • Whiskers       → 2nd / 98th percentile by default (Tukey 1.5×IQR or
+//                      min/max selectable)
+//   • Outlier dots   → individual samples beyond the whiskers
+//   • Extreme marks  → the bar's true high/low when they sit beyond a whisker
+//
+// Because every intrabar sample represents the same amount of time, dense
+// clusters of samples = price lingered there; sparse tails = price passed
+// through quickly. Optional volume weighting turns it into "where did volume
+// trade" instead of "where did time pass".
+//
+// TIP: hide the regular chart candles (Chart settings → Symbol → uncheck Body,
+// Borders and Wick, or right-click the main series → Hide) so only the
+// boxplots remain.
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("Boxplot Candles", shorttitle = "BoxCandles", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// ── Inputs ───────────────────────────────────────────────────────────────────
+GRP_DATA  = "Intrabar data"
+GRP_STATS = "Statistics"
+GRP_STYLE = "Style"
+
+autoTf        = input.bool(true,       "Auto intrabar timeframe", group = GRP_DATA, tooltip = "Picks the largest lower timeframe that still yields roughly the target number of samples per chart bar.")
+targetSamples = input.int(60,          "Target samples per bar (auto)", minval = 5, maxval = 1000, group = GRP_DATA)
+manualTf      = input.timeframe("1",   "Manual intrabar timeframe", group = GRP_DATA, tooltip = "Used when auto is off. Must be lower than or equal to the chart timeframe.")
+srcMode       = input.string("Close",  "Sample price", options = ["Close", "HLC3", "OHLC (4 points)"], group = GRP_DATA, tooltip = "Which price(s) of each intrabar are added to the distribution. OHLC adds all four prices of every intrabar (each with 1/4 of its weight), which captures intrabar wicks.")
+weighting     = input.string("Time",   "Weighting", options = ["Time", "Volume"], group = GRP_DATA, tooltip = "Time: every intrabar counts equally (where price spent time). Volume: each intrabar is weighted by its volume (where volume traded).")
+fallback      = input.bool(true,       "Draw plain candle when no intrabar data", group = GRP_DATA, tooltip = "Lower-timeframe history is limited. Older bars without intrabar data are drawn as faded regular candles.")
+
+bodyPct       = input.float(25.0,      "Box percentile (p / 100-p)", minval = 1.0, maxval = 49.0, step = 1.0, group = GRP_STATS, tooltip = "25 gives the classic Q1/Q3 box.")
+whiskerMode   = input.string("Percentile", "Whisker method", options = ["Percentile", "Tukey (k × IQR)", "Min / Max"], group = GRP_STATS, tooltip = "Percentile 2 gives 2nd/98th percentile whiskers (same as Ori Candlesticks Box Plot). Tukey is the textbook boxplot: whiskers end at the furthest sample within k × IQR of the box.")
+tukeyK        = input.float(1.5,       "Tukey k", minval = 0.1, step = 0.1, group = GRP_STATS)
+whiskerPct    = input.float(2.0,       "Percentile whisker (p / 100-p)", minval = 0.0, maxval = 49.0, step = 0.5, group = GRP_STATS)
+
+upColor       = input.color(color.new(#26A69A, 0), "Up box",   group = GRP_STYLE, inline = "c")
+dnColor       = input.color(color.new(#EF5350, 0), "Down box", group = GRP_STYLE, inline = "c")
+boxTransp     = input.int(60,          "Box fill transparency", minval = 0, maxval = 100, group = GRP_STYLE)
+medColor      = input.color(color.new(color.yellow, 0), "Median", group = GRP_STYLE, inline = "m")
+medWidth      = input.int(2,           "Width", minval = 1, maxval = 5, group = GRP_STYLE, inline = "m")
+medStyle      = input.string("Line (last 500 bars)", "Median display", options = ["Line (last 500 bars)", "Marker (all bars)", "Both"], group = GRP_STYLE)
+medWidthPct   = input.int(70,          "Median line width (% of bar)", minval = 10, maxval = 100, group = GRP_STYLE)
+showMean      = input.bool(false,      "Show mean", group = GRP_STYLE, inline = "mean")
+meanColor     = input.color(color.new(color.white, 0), "", group = GRP_STYLE, inline = "mean")
+showOutliers  = input.bool(true,       "Show outlier samples (last 500 labels)", group = GRP_STYLE, inline = "o")
+outColor      = input.color(color.new(color.orange, 0), "", group = GRP_STYLE, inline = "o")
+maxDots       = input.int(4,           "Max outlier dots per side per bar", minval = 1, maxval = 20, group = GRP_STYLE)
+showExtremes  = input.bool(true,       "Mark true bar high/low beyond whiskers", group = GRP_STYLE, inline = "x")
+extColor      = input.color(color.new(color.gray, 0), "", group = GRP_STYLE, inline = "x")
+
+// ── Intrabar timeframe selection ─────────────────────────────────────────────
+// Largest lower timeframe that still gives `target` samples per chart bar.
+autoLtf(simple int target) =>
+    int s = timeframe.in_seconds()
+    s <= 60           ? timeframe.period :
+     s / 86400 >= target ? "1D"  :
+     s / 14400 >= target ? "240" :
+     s / 7200  >= target ? "120" :
+     s / 3600  >= target ? "60"  :
+     s / 1800  >= target ? "30"  :
+     s / 900   >= target ? "15"  :
+     s / 600   >= target ? "10"  :
+     s / 300   >= target ? "5"   :
+     s / 180   >= target ? "3"   :
+     s / 120   >= target ? "2"   : "1"
+
+ltf = autoTf ? autoLtf(targetSamples) : manualTf
+
+[ltfO, ltfH, ltfL, ltfC, ltfV] = request.security_lower_tf(syminfo.tickerid, ltf, [open, high, low, close, volume])
+
+// ── Statistics helpers ───────────────────────────────────────────────────────
+// Weighted percentile (p in 0..100) using the cumulative-weight midpoint rule.
+// Reduces to ordinary linear-interpolated percentile when all weights are equal.
+wPercentile(array<float> v, array<float> w, array<int> idx, float total, float p) =>
+    int n = idx.size()
+    float result = na
+    if n == 1
+        result := v.get(idx.get(0))
+    else if n > 1
+        float target = p / 100.0 * total
+        float cum = 0.0
+        float prevPos = na
+        float prevVal = na
+        for i = 0 to n - 1
+            int k = idx.get(i)
+            float wk = w.get(k)
+            float pos = cum + wk / 2.0          // centre of this sample's weight
+            float x = v.get(k)
+            if pos >= target
+                if na(prevPos)
+                    result := x
+                else
+                    float span = pos - prevPos
+                    result := span > 0 ? prevVal + (x - prevVal) * (target - prevPos) / span : x
+                break
+            prevPos := pos
+            prevVal := x
+            cum += wk
+        if na(result)
+            result := v.get(idx.get(n - 1))
+    result
+
+// ── Build the intrabar distribution ─────────────────────────────────────────
+vals = array.new<float>()
+wts  = array.new<float>()
+int nBars = ltfC.size()
+if nBars > 0
+    for i = 0 to nBars - 1
+        float w = weighting == "Volume" ? nz(ltfV.get(i)) : 1.0
+        switch srcMode
+            "Close" =>
+                vals.push(ltfC.get(i))
+                wts.push(w)
+            "HLC3" =>
+                vals.push((ltfH.get(i) + ltfL.get(i) + ltfC.get(i)) / 3.0)
+                wts.push(w)
+            =>
+                vals.push(ltfO.get(i))
+                vals.push(ltfH.get(i))
+                vals.push(ltfL.get(i))
+                vals.push(ltfC.get(i))
+                for j = 1 to 4
+                    wts.push(w / 4.0)
+
+float totalW = wts.sum()
+// No volume on this symbol/bar → fall back to equal (time) weights.
+if vals.size() > 0 and totalW <= 0
+    wts.fill(1.0)
+    totalW := wts.size()
+
+float q1 = na, float med = na, float q3 = na
+float loW = na, float hiW = na, float mean = na
+var array<float> upOut = array.new<float>()
+var array<float> dnOut = array.new<float>()
+upOut.clear()
+dnOut.clear()
+
+if vals.size() > 0
+    idx  = vals.sort_indices(order.ascending)
+    q1  := wPercentile(vals, wts, idx, totalW, bodyPct)
+    med := wPercentile(vals, wts, idx, totalW, 50)
+    q3  := wPercentile(vals, wts, idx, totalW, 100 - bodyPct)
+    float wsum = 0.0
+    for i = 0 to vals.size() - 1
+        wsum += vals.get(i) * wts.get(i)
+    mean := wsum / totalW
+
+    float vMin = vals.min()
+    float vMax = vals.max()
+    switch whiskerMode
+        "Min / Max" =>
+            loW := vMin
+            hiW := vMax
+        "Percentile" =>
+            loW := wPercentile(vals, wts, idx, totalW, whiskerPct)
+            hiW := wPercentile(vals, wts, idx, totalW, 100 - whiskerPct)
+        =>
+            float iqr = q3 - q1
+            float loFence = q1 - tukeyK * iqr
+            float hiFence = q3 + tukeyK * iqr
+            loW := q1
+            hiW := q3
+            for x in vals
+                if x >= loFence and x < loW
+                    loW := x
+                if x <= hiFence and x > hiW
+                    hiW := x
+    loW := math.min(loW, q1)
+    hiW := math.max(hiW, q3)
+
+    // Outlier samples, sorted from most extreme inward.
+    for i = idx.size() - 1 to 0
+        float x = vals.get(idx.get(i))
+        if x > hiW
+            upOut.push(x)
+        else
+            break
+    for i = 0 to idx.size() - 1
+        float x = vals.get(idx.get(i))
+        if x < loW
+            dnOut.push(x)
+        else
+            break
+
+bool hasData = not na(med)
+bool isUp    = close >= open
+color baseCol = isUp ? upColor : dnColor
+
+// ── Draw boxplot ─────────────────────────────────────────────────────────────
+// Body = Q1..Q3, wicks = whiskers.
+plotcandle(q1, hiW, loW, q3, "Boxplot", color = color.new(baseCol, boxTransp), wickcolor = baseCol, bordercolor = baseCol)
+
+// Fallback for bars older than the available intrabar history.
+bool fb = fallback and not hasData
+plotcandle(fb ? open : na, fb ? high : na, fb ? low : na, fb ? close : na, "Fallback candle",
+     color = color.new(baseCol, 85), wickcolor = color.new(baseCol, 70), bordercolor = color.new(baseCol, 70))
+
+// Median as a horizontal bar across the box.
+bool medLine   = medStyle != "Marker (all bars)"
+bool medMarker = medStyle != "Line (last 500 bars)"
+if hasData and medLine
+    int barMs  = na(time_close) ? timeframe.in_seconds() * 1000 : time_close - time
+    int halfMs = int(barMs * medWidthPct / 200.0)
+    line.new(time - halfMs, med, time + halfMs, med, xloc = xloc.bar_time, color = medColor, width = medWidth)
+plotchar(medMarker ? med : na, "Median marker", "━", location.absolute, medColor, size = size.small)
+
+plotshape(showMean ? mean : na, "Mean", shape.diamond, location.absolute, meanColor, size = size.tiny)
+
+// Individual outlier samples (deduplicated to the tick).
+drawDots(array<float> arr, int maxN, color col) =>
+    float last = na
+    int drawn = 0
+    for x in arr
+        if drawn >= maxN
+            break
+        float r = math.round_to_mintick(x)
+        if na(last) or r != last
+            label.new(bar_index, r, "", style = label.style_circle, color = col, size = size.tiny, tooltip = str.tostring(r, format.mintick))
+            last := r
+            drawn += 1
+
+if showOutliers and hasData
+    drawDots(upOut, maxDots, outColor)
+    drawDots(dnOut, maxDots, outColor)
+
+// True bar extremes that lie beyond the whiskers (the samples may miss wick tips).
+plotshape(showExtremes and hasData and high > hiW ? high : na, "Extreme high", shape.xcross, location.absolute, extColor, size = size.tiny)
+plotshape(showExtremes and hasData and low  < loW ? low  : na, "Extreme low",  shape.xcross, location.absolute, extColor, size = size.tiny)
+
+// ── Data window values ───────────────────────────────────────────────────────
+plot(hiW,  "Upper whisker", display = display.data_window)
+plot(q3,   "Q3",            display = display.data_window)
+plot(med,  "Median",        display = display.data_window)
+plot(q1,   "Q1",            display = display.data_window)
+plot(loW,  "Lower whisker", display = display.data_window)
+plot(mean, "Mean",          display = display.data_window)
+plot(vals.size(), "Samples", display = display.data_window)
