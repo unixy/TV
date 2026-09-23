@@ -216,7 +216,16 @@ if shortTrigger
          style = label.style_label_down, color = color.new(color.red, 20), textcolor = color.white, size = size.small)
 
 // ---------------- Stats table ----------------
-var table statsTable = table.new(position.top_right, 2, 7, border_width = 1)
+// Rows 7-10 are per-bar diagnostics for the setup gates that aren't
+// visible as a single pass/fail (unlike bias/vol/time window above) -
+// use these to see exactly which condition is closest to firing, or
+// stuck, when longTrigger/shortTrigger haven't fired in a while.
+barsSinceLongTouchDisp  = na(barsSinceLongTouch)  ? "-" : str.tostring(barsSinceLongTouch)
+barsSinceShortTouchDisp = na(barsSinceShortTouch) ? "-" : str.tostring(barsSinceShortTouch)
+confluenceDistAtr = not na(vwapSession) and atr5 != 0 ? math.min(math.abs(close - vwapSession), math.abs(close - emaConfluence)) / atr5 : na
+rsiDisp = str.tostring(rsiVal, "#.#")
+
+var table statsTable = table.new(position.top_right, 2, 11, border_width = 1)
 if barstate.islast
     table.cell(statsTable, 0, 0, "Session Pullback System", bgcolor = color.gray, text_color = color.white)
     table.cell(statsTable, 1, 0, "", bgcolor = color.gray)
@@ -232,6 +241,15 @@ if barstate.islast
     table.cell(statsTable, 1, 5, noTradeWindow ? "YES (skip)" : "no")
     table.cell(statsTable, 0, 6, "Signals This Block")
     table.cell(statsTable, 1, 6, str.tostring(signalsThisBlock))
+    table.cell(statsTable, 0, 7, "Leg Valid (L/S)")
+    table.cell(statsTable, 1, 7, (legUpValid ? "Y" : "n") + " / " + (legDownValid ? "Y" : "n"))
+    table.cell(statsTable, 0, 8, "Bars Since Zone Touch (L/S)")
+    table.cell(statsTable, 1, 8, barsSinceLongTouchDisp + " / " + barsSinceShortTouchDisp + "  (need <= " + str.tostring(zoneTouchWindow) + ")")
+    table.cell(statsTable, 0, 9, "Confluence Dist (x ATR)")
+    table.cell(statsTable, 1, 9, na(confluenceDistAtr) ? "-" : str.tostring(confluenceDistAtr, "#.##") + "  (need <= " + str.tostring(confluenceAtrMul) + ")",
+         text_color = not na(confluenceDistAtr) and confluenceDistAtr <= confluenceAtrMul ? color.green : color.gray)
+    table.cell(statsTable, 0, 10, "RSI (reclaim @ " + str.tostring(rsiTrigger) + ")")
+    table.cell(statsTable, 1, 10, rsiDisp)
 
 alertcondition(longTrigger, title = "SPS Long Trigger", message = "Session Pullback System: LONG setup triggered")
 alertcondition(shortTrigger, title = "SPS Short Trigger", message = "Session Pullback System: SHORT setup triggered")
