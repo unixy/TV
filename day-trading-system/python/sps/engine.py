@@ -51,24 +51,33 @@ class SPSParams:
     rsi_trigger: float = 45.0
     vol_ma_len: int = 20
 
-    # Session block
-    session_anchor_hour: int = 9
-    session_anchor_min: int = 30
+    # Session block - defaults anchor to 00:00 UTC so 4h blocks tile the
+    # day cleanly (00:00/04:00/08:00/12:00/16:00/20:00 UTC), matching most
+    # perpetual venues' funding-settlement times. Feed the engine timestamps
+    # already in UTC.
+    session_anchor_hour: int = 0
+    session_anchor_min: int = 0
     block_len_min: int = 240
     no_trade_open_min: int = 10
     no_trade_close_min: int = 20
     max_trades_per_block: int = 2
 
-    # Volatility filter
+    # Volatility filter. Crypto trades every 5m bar around the clock, so
+    # ~20 calendar days of 5m bars is 20 x 288 = 5760 bars (not ~1500,
+    # which was the equivalent for a market with fixed trading hours).
     atr_len: int = 14
-    pct_lookback: int = 1000
+    pct_lookback: int = 5760
     low_pctile: float = 10.0
     high_pctile: float = 97.5
 
-    # Risk management
-    allow_shorts: bool = True
+    # Risk management. allow_shorts defaults False: a genuine spot account
+    # has no borrow mechanism and cannot short - only enable this if you're
+    # simulating a margin/perpetual-futures account, in which case
+    # PLAYBOOK.md section 9's leverage/liquidation cautions apply.
+    allow_shorts: bool = False
     risk_pct_per_trade: float = 0.4
-    allow_fractional: bool = False
+    allow_fractional: bool = True
+    qty_step: float = 0.0  # if > 0, position size is rounded down to this step (exchange lot size)
     min_rr: float = 1.5
     target_r_multiple: float = 2.0
     be_trigger_r: float = 1.0
@@ -78,11 +87,16 @@ class SPSParams:
     weekly_loss_limit_pct: float = 3.0
     consec_loss_breaker: int = 2
 
-    # Costs / execution
+    # Costs / execution. Crypto exchanges charge a percent of notional per
+    # fill (not a flat $-per-order) - defaults approximate a typical spot
+    # taker fee on a major exchange; check your own account's fee tier
+    # (maker/taker, any fee-token discount) and update before trusting the
+    # backtest. Slippage is also modeled as a percent of price, since a
+    # fixed tick count doesn't translate across assets at very different
+    # price levels (BTC vs. a lower-priced altcoin).
     initial_capital: float = 25_000.0
-    commission_per_order: float = 1.0
-    slippage_ticks: int = 2
-    tick_size: float = 0.01
+    commission_pct: float = 0.001   # 0.1% per fill
+    slippage_pct: float = 0.0002    # 0.02% per fill, adverse
 
 
 def build_features(df: pd.DataFrame, p: SPSParams) -> pd.DataFrame:
@@ -188,6 +202,27 @@ class Trade:
     breakeven_moved: bool = False
 
 
+def _round_size(size: float, p: SPSParams) -> float:
+    """Round a raw position size down to a tradeable amount: to the
+    exchange's lot/step size if given, else to a whole unit unless
+    fractional sizing is allowed (the crypto default)."""
+    if p.qty_step > 0:
+        return float(np.floor(size / p.qty_step) * p.qty_step)
+    if not p.allow_fractional:
+        return float(np.floor(size))
+    return size
+
+
+def _commission(price: float, qty: float, p: SPSParams) -> float:
+    """Percent-of-notional exchange fee for one fill."""
+    return price * qty * p.commission_pct
+
+
+def _slippage_fill(price: float, is_buy: bool, p: SPSParams) -> float:
+    """Adverse fill price: buys fill higher, sells fill lower."""
+    return price * (1 + p.slippage_pct) if is_buy else price * (1 - p.slippage_pct)
+
+
 def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Series, dict]:
     n = len(feat)
     idx = feat.index
@@ -209,7 +244,6 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
     cpl_price = feat["confirmed_piv_low_price"].to_numpy()
     cph_price = feat["confirmed_piv_high_price"].to_numpy()
 
-    tick = p.tick_size
     equity = p.initial_capital
     day_start_equity = None
     week_start_equity = None
@@ -270,9 +304,9 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
                     reason = "target"
 
             if exit_price is not None:
-                fill = exit_price - p.slippage_ticks * tick if position_side == 1 else exit_price + p.slippage_ticks * tick
+                fill = _slippage_fill(exit_price, is_buy=(position_side == -1), p=p)
                 pnl = (fill - entry_price) * qty_open if position_side == 1 else (entry_price - fill) * qty_open
-                pnl -= p.commission_per_order
+                pnl -= _commission(fill, qty_open, p)
                 equity += pnl
                 current_trade.exit_time = idx[i]
                 current_trade.exit_price = fill
@@ -292,13 +326,11 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
             r_now = (c[i] - entry_price) / r_dist if position_side == 1 else (entry_price - c[i]) / r_dist
             if r_now >= p.be_trigger_r and not be_done:
                 if p.partial_at_be and not partial_done:
-                    part_qty = qty_open * p.partial_pct / 100.0
-                    if not p.allow_fractional:
-                        part_qty = float(np.floor(part_qty))
+                    part_qty = _round_size(qty_open * p.partial_pct / 100.0, p)
                     if part_qty > 0:
-                        fill = c[i] - p.slippage_ticks * tick if position_side == 1 else c[i] + p.slippage_ticks * tick
+                        fill = _slippage_fill(c[i], is_buy=(position_side == -1), p=p)
                         pnl = (fill - entry_price) * part_qty if position_side == 1 else (entry_price - fill) * part_qty
-                        pnl -= p.commission_per_order
+                        pnl -= _commission(fill, part_qty, p)
                         equity += pnl
                         current_trade.partial_pnl += pnl
                         current_trade.pnl += pnl
@@ -310,9 +342,9 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
 
         # ---- 3. hard time-stop: flat at block end, no exceptions ----
         if new_block[i] and position_side != 0:
-            fill = c[i] - p.slippage_ticks * tick if position_side == 1 else c[i] + p.slippage_ticks * tick
+            fill = _slippage_fill(c[i], is_buy=(position_side == -1), p=p)
             pnl = (fill - entry_price) * qty_open if position_side == 1 else (entry_price - fill) * qty_open
-            pnl -= p.commission_per_order
+            pnl -= _commission(fill, qty_open, p)
             equity += pnl
             current_trade.exit_time = idx[i]
             current_trade.exit_price = fill
@@ -398,17 +430,22 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
 
         if can_enter and long_trigger and stop_dist_long > 0 and p.target_r_multiple >= p.min_rr:
             risk_dollars = equity * p.risk_pct_per_trade / 100.0
-            size = risk_dollars / stop_dist_long
-            if not p.allow_fractional:
-                size = float(np.floor(size))
+            size = _round_size(risk_dollars / stop_dist_long, p)
             if size > 0:
-                fill = c[i] + p.slippage_ticks * tick
-                equity -= p.commission_per_order
+                fill = _slippage_fill(c[i], is_buy=True, p=p)
+                # Spot, no leverage: can never spend more cash than you have.
+                # A tight ATR stop on a high-priced coin can otherwise imply
+                # a position worth more than the account - cap it, which
+                # means realized risk comes in under the target risk% rather
+                # than over it (safe, just not the "intended" size).
+                size = min(size, _round_size(equity / fill, p))
+            if size > 0:
+                equity -= _commission(fill, size, p)
                 position_side = 1
                 entry_bar = i
                 entry_price = fill
                 stop_price = stop_long
-                r_dist = max(entry_price - stop_price, tick)
+                r_dist = max(entry_price - stop_price, entry_price * 1e-6)
                 target_price = entry_price + r_dist * p.target_r_multiple
                 qty_open = size
                 be_done = partial_done = False
@@ -419,17 +456,15 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
                 )
         elif can_enter and short_trigger and stop_dist_short > 0 and p.target_r_multiple >= p.min_rr:
             risk_dollars = equity * p.risk_pct_per_trade / 100.0
-            size = risk_dollars / stop_dist_short
-            if not p.allow_fractional:
-                size = float(np.floor(size))
+            size = _round_size(risk_dollars / stop_dist_short, p)
             if size > 0:
-                fill = c[i] - p.slippage_ticks * tick
-                equity -= p.commission_per_order
+                fill = _slippage_fill(c[i], is_buy=False, p=p)
+                equity -= _commission(fill, size, p)
                 position_side = -1
                 entry_bar = i
                 entry_price = fill
                 stop_price = stop_short
-                r_dist = max(stop_price - entry_price, tick)
+                r_dist = max(stop_price - entry_price, entry_price * 1e-6)
                 target_price = entry_price - r_dist * p.target_r_multiple
                 qty_open = size
                 be_done = partial_done = False
@@ -448,9 +483,9 @@ def run_backtest(feat: pd.DataFrame, p: SPSParams) -> tuple[pd.DataFrame, pd.Ser
 
     # If a position is still open at the end of the data, close it at the last price.
     if position_side != 0 and current_trade is not None:
-        fill = c[-1]
+        fill = _slippage_fill(c[-1], is_buy=(position_side == -1), p=p)
         pnl = (fill - entry_price) * qty_open if position_side == 1 else (entry_price - fill) * qty_open
-        pnl -= p.commission_per_order
+        pnl -= _commission(fill, qty_open, p)
         equity += pnl
         current_trade.exit_time = idx[-1]
         current_trade.exit_price = fill

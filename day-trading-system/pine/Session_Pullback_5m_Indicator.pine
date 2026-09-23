@@ -8,6 +8,18 @@ indicator(title = "Session Pullback 5m (SPS)", shorttitle = "SPS Indicator", ove
 // 4-hour session-block boundaries/countdown, and a conservative volatility
 // filter. It draws signals and levels only - it does NOT place trades.
 // Use Session_Pullback_5m_Strategy.pine for backtesting with sizing/exits.
+//
+// Tailored for spot crypto (top-10-by-market-cap majors like BTC/ETH on a
+// major exchange). Since crypto trades 24/7, the default session anchor is
+// 00:00 UTC, which tiles 4-hour blocks cleanly across the day
+// (00:00/04:00/08:00/12:00/16:00/20:00 UTC) - set your chart to UTC so the
+// block boundaries drawn here match what you intend to trade.
+//
+// This is a visual/alerting tool only - it plots both long and short
+// signals for awareness, but a true spot account cannot act on a short
+// signal (no borrow mechanism). Shorting requires margin or perpetual
+// futures, which carries the leverage/liquidation cautions in
+// PLAYBOOK.md section 9.
 // ============================================================================
 
 // ---------------- Bias (4H) ----------------
@@ -32,17 +44,17 @@ rsiTrigger  = input.float(45, "RSI Reclaim Level", minval = 1, maxval = 99, grou
 volMaLen    = input.int(20, "Volume MA Length", minval = 1, group = "Trigger")
 
 // ---------------- Session Block ----------------
-sessionStartHour = input.int(9, "Block Anchor Hour (0-23)", minval = 0, maxval = 23, group = "Session Block")
-sessionStartMin  = input.int(30, "Block Anchor Minute", minval = 0, maxval = 55, step = 5, group = "Session Block")
-sessionTz        = input.string(syminfo.timezone, "Session Timezone", tooltip = "e.g. America/New_York, UTC, Etc/UTC. Defaults to the instrument's exchange timezone.", group = "Session Block")
+sessionStartHour = input.int(0, "Block Anchor Hour (0-23, UTC)", minval = 0, maxval = 23, group = "Session Block")
+sessionStartMin  = input.int(0, "Block Anchor Minute", minval = 0, maxval = 55, step = 5, group = "Session Block")
+sessionTz        = input.string("UTC", "Session Timezone", tooltip = "Crypto trades 24/7 - UTC is the default so blocks land on 00:00/04:00/08:00/12:00/16:00/20:00 UTC, matching funding-settlement times on most perpetual venues.", group = "Session Block")
 blockLenMin       = 240
 noTradeOpenMin    = input.int(10, "No New Entries: First N Minutes of Block", minval = 0, group = "Session Block")
 noTradeCloseMin   = input.int(20, "No New Entries: Last N Minutes of Block", minval = 0, group = "Session Block")
 
 // ---------------- Volatility Filter ----------------
 atrLen        = input.int(14, "ATR Length (5m)", minval = 1, group = "Volatility Filter")
-pctLookback   = input.int(1000, "ATR% Percentile Lookback (bars)", minval = 50,
-     tooltip = "~20 trading days on a regular-hours 5m equity chart is roughly 1500-1600 bars; adjust for 24/7 or extended-hours markets.", group = "Volatility Filter")
+pctLookback   = input.int(5760, "ATR% Percentile Lookback (bars)", minval = 50,
+     tooltip = "Crypto trades every 5m bar around the clock, so ~20 calendar days of 5m bars is 20 x 288 = 5760 bars (not ~1500, which was the equivalent for a market with fixed trading hours).", group = "Volatility Filter")
 lowPctile     = input.float(10, "Skip Below This Percentile (dead market)", minval = 0, maxval = 100, group = "Volatility Filter")
 highPctile    = input.float(97.5, "Skip Above This Percentile (event/abnormal vol)", minval = 0, maxval = 100, group = "Volatility Filter")
 

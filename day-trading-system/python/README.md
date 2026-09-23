@@ -14,10 +14,11 @@ pip install -r requirements.txt
 
 ## Quick start (synthetic data smoke test)
 
-`make_synthetic_data.py` generates a random-walk-with-regime-drift CSV.
-**This is not real market data and proves nothing about whether the system
-has an edge** - it exists only to let you confirm the code runs on your
-machine before you point it at real data.
+`make_synthetic_data.py` generates a continuous 24/7, random-walk-with-
+regime-drift CSV starting at a BTC-like price level. **This is not real
+market data and proves nothing about whether the system has an edge** - it
+exists only to let you confirm the code runs on your machine before you
+point it at real data.
 
 ```bash
 python make_synthetic_data.py --days 90 --out synthetic_5m.csv
@@ -29,9 +30,9 @@ target/R-multiple), `results/metrics.json`, and `results/equity_curve.png`.
 
 ## Using real data
 
-Get real 5-minute OHLCV bars for your instrument (your broker's export,
-a data vendor, or a library like `yfinance` or `ccxt`) and save as a CSV
-with columns:
+Get real 5-minute OHLCV bars for a **top-10-by-market-cap coin on a major
+exchange** (spot, e.g. BTC/USDT or ETH/USDT on Binance/Coinbase/Kraken) -
+`ccxt` is the standard library for this. Save as a CSV with columns:
 
 ```
 timestamp,open,high,low,close,volume
@@ -40,42 +41,42 @@ timestamp,open,high,low,close,volume
 Then:
 
 ```bash
-python run_backtest.py --csv your_data.csv --out-dir results --capital 25000 --risk-pct 0.4
+python run_backtest.py --csv your_data.csv --out-dir results --capital 25000 --risk-pct 0.4 --commission-pct 0.001 --slippage-pct 0.0002
 ```
+
+Set `--commission-pct` to your actual account's taker fee (spot majors are
+commonly ~0.1% = 0.001, less with a fee-token discount - check your own fee
+tier) rather than trusting the default.
 
 ### Timezones
 
-`timestamp` must already be in the timezone you want session blocks
-measured in (e.g. US equities: `America/New_York` local time, naive - no
-UTC offset). The engine does not do timezone conversion; if your data is in
-UTC and your session anchor (default 09:30) is meant to be exchange-local
-time, convert before loading, e.g.:
+`timestamp` must already be **in UTC**, tz-naive (no offset suffix). Crypto
+trades 24/7 so there's no exchange-local session to convert to - the
+default session anchor (00:00) lines up 4-hour blocks at
+00:00/04:00/08:00/12:00/16:00/20:00 UTC, which also happens to match
+funding-settlement times on most perpetual futures venues. If your raw data
+has a UTC offset or is in another timezone, normalize it first:
 
 ```python
 import pandas as pd
-df = pd.read_csv("raw_utc.csv", parse_dates=["timestamp"])
-df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert("America/New_York").dt.tz_localize(None)
+df = pd.read_csv("raw.csv", parse_dates=["timestamp"])
+df["timestamp"] = df["timestamp"].dt.tz_convert("UTC").dt.tz_localize(None)  # if already tz-aware
+# or: df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_localize(None)  # if naive but actually UTC
 df.to_csv("your_data.csv", index=False)
 ```
 
-### Session block length vs. trading hours
-
-4-hour blocks tile cleanly across a 24/7 market (crypto). For a 6.5-hour
-equity RTH session anchored at 09:30, two 4-hour blocks (09:30-13:30 and
-13:30-17:30) overrun the 16:00 close - the second block just runs short.
-That's fine mechanically (the no-new-entries-in-the-last-20-minutes rule
-still applies relative to the block's own boundary, and nothing stops you
-at the actual close), but be aware the "4 hours" is measured from your
-anchor, not from market open/close. If you want blocks that map exactly to
-your session, pick an anchor and adjust `--block anchor`/length via
-`SPSParams` directly in a small script instead of the CLI defaults.
+Since blocks tile the day exactly in a 24/7 market, there's no equivalent
+here of the equities "the last block runs past the close" compromise - the
+six blocks a day are always full 4-hour blocks, every day, weekends
+included.
 
 ## Tuning parameters
 
 All rule knobs live in `sps.engine.SPSParams` (risk %, loss limits, fib
-levels, filters, etc.) - the CLI only exposes the few you'll change most
-often (`--capital`, `--risk-pct`, `--tick-size`). For anything else, write a
-short script:
+levels, filters, `allow_shorts`, `qty_step` for exchange lot-size rounding,
+etc.) - the CLI only exposes the few you'll change most often (`--capital`,
+`--risk-pct`, `--commission-pct`, `--slippage-pct`). For anything else,
+write a short script:
 
 ```python
 from sps.engine import SPSParams, build_features, run_backtest

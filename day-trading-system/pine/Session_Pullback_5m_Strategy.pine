@@ -2,7 +2,7 @@
 strategy(title = "Session Pullback 5m (SPS) Strategy", shorttitle = "SPS Strategy", overlay = true,
      initial_capital = 25000, currency = currency.USD,
      default_qty_type = strategy.fixed, default_qty_value = 0,
-     commission_type = strategy.commission.cash_per_order, commission_value = 1.0,
+     commission_type = strategy.commission.percent, commission_value = 0.1,
      slippage = 2, pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = true,
      max_labels_count = 200, max_lines_count = 200)
 // process_orders_on_close=true: entries and the hard time-stop flatten fill
@@ -11,6 +11,13 @@ strategy(title = "Session Pullback 5m (SPS) Strategy", shorttitle = "SPS Strateg
 // `slippage` setting above) but it's what makes "flat at the end of the
 // block, right then and there" actually mean the block's own close, and it
 // keeps this script's fills directly comparable to the Python backtester.
+//
+// commission_value = 0.1 (%) approximates a typical spot taker fee on a
+// major exchange (e.g. Binance/Coinbase-class venues) - check your own
+// account's fee tier (maker/taker, any fee-token discount) and update this
+// before trusting the backtest. `slippage` is in ticks of syminfo.mintick,
+// which TradingView sets per the instrument you attach this to, so it
+// adapts automatically across BTC/ETH/etc. without further changes.
 
 // ============================================================================
 // Session Pullback System - backtestable strategy version.
@@ -20,6 +27,8 @@ strategy(title = "Session Pullback 5m (SPS) Strategy", shorttitle = "SPS Strateg
 // small fixed risk per trade, hard daily/weekly loss circuit breakers, a
 // consecutive-loss breaker per session block, and a hard time-stop that
 // flattens the position at the end of every 4-hour block regardless of P&L.
+// Tailored for spot crypto (top-10-by-market-cap majors, no leverage) - see
+// PLAYBOOK.md section 9 if you intend to adapt this for perpetual futures.
 // Backtest results are only as good as the commission/slippage inputs below -
 // set them to match your actual venue before trusting any output.
 // ============================================================================
@@ -44,9 +53,9 @@ rsiTrigger  = input.float(45, "RSI Reclaim Level", minval = 1, maxval = 99, grou
 volMaLen    = input.int(20, "Volume MA Length", minval = 1, group = "Trigger")
 
 // ---------------- Session Block ----------------
-sessionStartHour = input.int(9, "Block Anchor Hour (0-23)", minval = 0, maxval = 23, group = "Session Block")
-sessionStartMin  = input.int(30, "Block Anchor Minute", minval = 0, maxval = 55, step = 5, group = "Session Block")
-sessionTz        = input.string(syminfo.timezone, "Session Timezone", group = "Session Block")
+sessionStartHour = input.int(0, "Block Anchor Hour (0-23, UTC)", minval = 0, maxval = 23, group = "Session Block")
+sessionStartMin  = input.int(0, "Block Anchor Minute", minval = 0, maxval = 55, step = 5, group = "Session Block")
+sessionTz        = input.string("UTC", "Session Timezone", tooltip = "Crypto trades 24/7 - UTC is the default so blocks land on 00:00/04:00/08:00/12:00/16:00/20:00 UTC, matching funding-settlement times on most perpetual venues.", group = "Session Block")
 blockLenMin       = 240
 noTradeOpenMin    = input.int(10, "No New Entries: First N Minutes of Block", minval = 0, group = "Session Block")
 noTradeCloseMin   = input.int(20, "No New Entries: Last N Minutes of Block", minval = 0, group = "Session Block")
@@ -54,15 +63,16 @@ maxTradesPerBlock = input.int(2, "Max Entries per Block", minval = 1, maxval = 1
 
 // ---------------- Volatility Filter ----------------
 atrLen        = input.int(14, "ATR Length (5m)", minval = 1, group = "Volatility Filter")
-pctLookback   = input.int(1000, "ATR% Percentile Lookback (bars)", minval = 50, group = "Volatility Filter")
+pctLookback   = input.int(5760, "ATR% Percentile Lookback (bars)", minval = 50,
+     tooltip = "Crypto trades every 5m bar around the clock, so ~20 calendar days of 5m bars is 20 x 288 = 5760 bars.", group = "Volatility Filter")
 lowPctile     = input.float(10, "Skip Below This Percentile", minval = 0, maxval = 100, group = "Volatility Filter")
 highPctile    = input.float(97.5, "Skip Above This Percentile", minval = 0, maxval = 100, group = "Volatility Filter")
 
 // ---------------- Risk Management ----------------
-allowShorts        = input.bool(true, "Allow Short Entries", group = "Risk Management")
+allowShorts        = input.bool(false, "Allow Short Entries", tooltip = "Off by default: a true spot account has no borrow mechanism and cannot short. Only enable this if you're trading on margin or perpetual futures, in which case PLAYBOOK.md section 9's leverage/liquidation cautions apply to every short taken here.", group = "Risk Management")
 riskPctPerTrade    = input.float(0.4, "Risk per Trade (% of equity)", minval = 0.01, maxval = 0.5, step = 0.05,
      tooltip = "Hard ceiling in this system is 0.5%. Do not raise this without live evidence the edge supports it.", group = "Risk Management")
-allowFractional    = input.bool(false, "Allow Fractional Position Size", tooltip = "Off = whole shares/contracts (equities/futures). Turn on for crypto/forex.", group = "Risk Management")
+allowFractional    = input.bool(true, "Allow Fractional Position Size", tooltip = "On by default for crypto (e.g. 0.0142 BTC is a normal position size). Turn off only if your venue/asset requires whole-unit sizing.", group = "Risk Management")
 minRR              = input.float(1.5, "Minimum Reward:Risk to Enter", minval = 1.0, step = 0.1, group = "Risk Management")
 targetRMultiple    = input.float(2.0, "Target (R multiples)", minval = 1.0, step = 0.1, group = "Risk Management")
 beTriggerR         = input.float(1.0, "Move Stop to Breakeven at (R)", minval = 0.1, step = 0.1, group = "Risk Management")

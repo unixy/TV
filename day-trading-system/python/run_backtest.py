@@ -5,7 +5,8 @@ Usage:
     python run_backtest.py --csv synthetic_5m.csv --out-dir results/
 
 CSV must have columns: timestamp,open,high,low,close,volume, with timestamp
-already in your intended session timezone (see README.md - "Timezones").
+in UTC (see README.md - "Timezones") - crypto trades 24/7, so the default
+session blocks are anchored to 00:00 UTC.
 """
 from __future__ import annotations
 
@@ -40,13 +41,17 @@ def main() -> None:
     ap.add_argument("--out-dir", default="results", help="Where to write trade_log.csv / equity_curve.png / metrics.json")
     ap.add_argument("--capital", type=float, default=25_000.0)
     ap.add_argument("--risk-pct", type=float, default=0.4)
-    ap.add_argument("--tick-size", type=float, default=0.01)
+    ap.add_argument("--commission-pct", type=float, default=0.001, help="Fraction, e.g. 0.001 = 0.1%% per fill")
+    ap.add_argument("--slippage-pct", type=float, default=0.0002, help="Fraction, e.g. 0.0002 = 0.02%% per fill")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
     df = load_csv(args.csv)
 
-    params = SPSParams(initial_capital=args.capital, risk_pct_per_trade=args.risk_pct, tick_size=args.tick_size)
+    params = SPSParams(
+        initial_capital=args.capital, risk_pct_per_trade=args.risk_pct,
+        commission_pct=args.commission_pct, slippage_pct=args.slippage_pct,
+    )
     feat = build_features(df, params)
     trades_df, equity, metrics = run_backtest(feat, params)
 

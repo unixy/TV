@@ -62,7 +62,7 @@ def build_rules_sheet(wb: Workbook):
 
     ws["A1"] = "Session Pullback System (SPS) - Conservative Risk Defaults"
     ws["A1"].font = TITLE_FONT
-    ws["A2"] = "Full rules: PLAYBOOK.md. Every number here is a hypothesis to validate on your own data - not a guarantee."
+    ws["A2"] = "Spot crypto, top-10-by-market-cap majors, no leverage. Full rules: PLAYBOOK.md. Every number here is a hypothesis to validate on your own data - not a guarantee."
     ws["A2"].font = Font(name=FONT_NAME, italic=True, size=9, color="666666")
 
     headers = ["Control", "Default", "Hard Ceiling / Notes"]
@@ -77,14 +77,16 @@ def build_rules_sheet(wb: Workbook):
         ("Max entries per 4H block", "2", "3 hard ceiling"),
         ("Max concurrent positions", "1", "1"),
         ("Daily loss limit", "1.2% of equity (~3R)", "Stop trading for the day, no exceptions"),
-        ("Weekly loss limit", "3.0% of equity", "Stop trading, review the week before resuming"),
+        ("Weekly loss limit", "3.0% of equity", "Any rolling 7-day window (crypto trades every day) - stop, review before resuming"),
         ("Consecutive-loss circuit breaker", "2 losses in a block", "Stop trading that block"),
         ("Minimum reward:risk to enter", "1.5R", "Do not take a trade below this"),
         ("Default target", "2.0R", "Or 127.2% fib extension, whichever is closer"),
         ("Move stop to breakeven at", "+1.0R", "Also take partial profit (default 50%) here"),
         ("Minimum stop distance", "1.0x 5m ATR", "Tighter = skip the trade, don't force it"),
-        ("No new entries", "First 10 min / last 20 min of block", "Of each 4-hour session block"),
+        ("No new entries", "First 10 min / last 20 min of block", "Of each 4-hour session block (00:00/04:00/08:00/12:00/16:00/20:00 UTC)"),
         ("Hard time-stop", "End of every 4H block", "Flatten win or lose - not optional"),
+        ("Instrument", "Spot, top-10-by-market-cap majors (BTC/ETH first)", "Major exchange, USDT/USD pair - not stablecoins, not blind top-10"),
+        ("Leverage", "1x (spot, no leverage)", "If using perpetuals: cap at 2x, never above 3x - liquidation is not a stop"),
     ]
     r = 5
     for control, default, note in rows:
@@ -135,11 +137,12 @@ def build_position_size_sheet(wb: Workbook):
     fields = [
         ("A5", "Account Equity ($)", "B5", 25000, MONEY_FMT),
         ("A6", "Risk % per Trade", "B6", 0.004, PCT_FMT),
-        ("A7", "Entry Price", "B7", 100.00, NUM_FMT),
-        ("A8", "Stop Price", "B8", 99.50, NUM_FMT),
+        ("A7", "Entry Price", "B7", 60000.00, NUM_FMT),
+        ("A8", "Stop Price", "B8", 59700.00, NUM_FMT),
         ("A9", "Target R Multiple", "B9", 2.0, "0.0\"R\""),
-        ("A10", "Allow Fractional Size? (Y/N)", "B10", "N", None),
-        ("A11", "Current 5-min ATR (optional, for stop-floor check)", "B11", 0.35, NUM_FMT),
+        ("A10", "Allow Fractional Size? (Y/N)", "B10", "Y", None),
+        ("A11", "Current 5-min ATR (optional, for stop-floor check)", "B11", 180.0, NUM_FMT),
+        ("A12", "Round-Trip Fee % (entry + exit combined)", "B12", 0.002, PCT_FMT),
     ]
     for lbl_ref, text, val_ref, default, fmt in fields:
         label(ws, lbl_ref, text)
@@ -149,23 +152,26 @@ def build_position_size_sheet(wb: Workbook):
         if fmt:
             c.number_format = fmt
 
-    label(ws, "A13", "RESULTS", bold=True)
-    ws["A13"].fill = SECTION_FILL
-    ws["B13"].fill = SECTION_FILL
+    label(ws, "A14", "RESULTS", bold=True)
+    ws["A14"].fill = SECTION_FILL
+    ws["B14"].fill = SECTION_FILL
 
     results = [
-        ("A14", "Risk $ (equity x risk %)", "B14", "=B5*B6", MONEY_FMT),
-        ("A15", "Stop Distance ($)", "B15", "=ABS(B7-B8)", NUM_FMT),
-        ("A16", "Direction (Long/Short)", "B16", '=IF(B7>B8,"LONG","SHORT")', None),
-        ("A17", "Raw Position Size", "B17", "=IFERROR(B14/B15,0)", NUM_FMT),
-        ("A18", "Position Size (use this)", "B18", '=IF(UPPER(B10)="Y",B17,ROUNDDOWN(B17,0))', NUM_FMT),
-        ("A19", "Position $ Value", "B19", "=B18*B7", MONEY_FMT),
-        ("A20", "R:R Check (min 1.5R)", "B20", '=IF(B9>=1.5,"OK","BELOW MINIMUM - DO NOT TAKE")', None),
-        ("A21", "Risk % Ceiling Check (max 0.5%)", "B21", '=IF(B6>0.005,"ABOVE HARD CEILING - REDUCE SIZE","OK")', None),
-        ("A22", "Target Price", "B22", '=IF(B16="LONG",B7+B15*B9,B7-B15*B9)', NUM_FMT),
-        ("A23", "Potential Reward $ (at target)", "B23", "=B18*B15*B9", MONEY_FMT),
-        ("A24", "Stop-Floor Check (min 1.0x ATR)", "B24", '=IF(B11=0,"",IF(B15/B11>=1,"OK","STOP TOO TIGHT - SKIP TRADE"))', None),
-        ("A25", "Breakeven Trigger Price (+1R)", "B25", '=IF(B16="LONG",B7+B15,B7-B15)', NUM_FMT),
+        ("A15", "Risk $ (equity x risk %)", "B15", "=B5*B6", MONEY_FMT),
+        ("A16", "Stop Distance ($)", "B16", "=ABS(B7-B8)", NUM_FMT),
+        ("A17", "Direction (Long/Short)", "B17", '=IF(B7>B8,"LONG","SHORT")', None),
+        ("A18", "Raw Position Size (coins)", "B18", "=IFERROR(B15/B16,0)", "#,##0.0000"),
+        ("A19", "Position Size (use this)", "B19", '=IF(UPPER(B10)="Y",B18,ROUNDDOWN(B18,0))', "#,##0.0000"),
+        ("A20", "Position $ Value (notional)", "B20", "=B19*B7", MONEY_FMT),
+        ("A21", "R:R Check (min 1.5R)", "B21", '=IF(B9>=1.5,"OK","BELOW MINIMUM - DO NOT TAKE")', None),
+        ("A22", "Risk % Ceiling Check (max 0.5%)", "B22", '=IF(B6>0.005,"ABOVE HARD CEILING - REDUCE SIZE","OK")', None),
+        ("A23", "Target Price", "B23", '=IF(B17="LONG",B7+B16*B9,B7-B16*B9)', NUM_FMT),
+        ("A24", "Potential Reward $ (at target, before fees)", "B24", "=B19*B16*B9", MONEY_FMT),
+        ("A25", "Estimated Fee Cost $ (entry+exit)", "B25", "=B20*B12", MONEY_FMT),
+        ("A26", "Stop-Floor Check (min 1.0x ATR)", "B26", '=IF(B11=0,"",IF(B16/B11>=1,"OK","STOP TOO TIGHT - SKIP TRADE"))', None),
+        ("A27", "Breakeven Trigger Price (+1R)", "B27", '=IF(B17="LONG",B7+B16,B7-B16)', NUM_FMT),
+        ("A28", "Spot Capital Check (no leverage)", "B28", '=IF(B20>B5,"CAPPED BY EQUITY - see row 29","OK")', None),
+        ("A29", "Max Position Achievable at Equity Cap", "B29", "=MIN(B19,B5/B7)", "#,##0.0000"),
     ]
     for lbl_ref, text, val_ref, formula, fmt in results:
         label(ws, lbl_ref, text)
@@ -173,21 +179,27 @@ def build_position_size_sheet(wb: Workbook):
         c.value = formula
         style_formula(c, fmt)
 
-    for warn_cell in ("B20", "B21", "B24"):
+    for warn_cell in ("B21", "B22", "B26", "B28"):
         ws[warn_cell].font = BOLD
 
     ws["D4"] = "Notes"
     ws["D4"].font = BOLD
     ws["D5"] = (
         "Position sizing formula: risk_dollars = equity x risk%; "
-        "position_size = floor(risk_dollars / |entry - stop|). "
-        "See PLAYBOOK.md section 9."
+        "position_size = risk_dollars / |entry - stop| (fractional coin size - "
+        "round down to your exchange's lot/step size). See PLAYBOOK.md section 9."
     )
     ws["D5"].alignment = Alignment(wrap_text=True)
-    ws["D6"] = "Never override row 20 or row 24's warning to force a trade in. A setup with no room for a real stop is not a trade."
+    ws["D6"] = "Never override row 21 or row 26's warning to force a trade in. A setup with no room for a real stop is not a trade."
     ws["D6"].alignment = Alignment(wrap_text=True)
-    ws.merge_cells("D5:D11")
-    ws.merge_cells("D6:D11")
+    ws["D7"] = "Row 12/25: set the fee % to your actual exchange taker fee (spot majors are commonly ~0.1% per fill = 0.2% round trip). This is an estimate, not what the backtester charges per-fill."
+    ws["D7"].alignment = Alignment(wrap_text=True)
+    ws["D8"] = "Row 28: on a spot (no-leverage) account you can't buy more $ of a coin than your cash - a tight ATR stop on a high-priced coin like BTC can imply a position size worth more than your account. If row 28 flags this, use row 29's size instead - your actual dollar risk will be lower than the target risk %, which is safe, just under-target, not a reason to add leverage."
+    ws["D8"].alignment = Alignment(wrap_text=True)
+    ws.merge_cells("D5:D12")
+    ws.merge_cells("D6:D12")
+    ws.merge_cells("D7:D12")
+    ws.merge_cells("D8:D13")
 
 
 def build_risk_tracker_sheet(wb: Workbook):
@@ -256,10 +268,10 @@ def build_risk_tracker_sheet(wb: Workbook):
     label(ws, "D4", "THIS WEEK", bold=True)
     ws["D4"].fill = SECTION_FILL
     ws["E4"].fill = SECTION_FILL
-    label(ws, "D5", "Week Start Date (Mon)")
+    label(ws, "D5", "Week Start Date (any 7-day window)")
     style_input(ws["E5"])
     ws["E5"].number_format = "yyyy-mm-dd"
-    label(ws, "D6", "Week End Date (Fri)")
+    label(ws, "D6", "Week End Date (crypto trades every day)")
     style_input(ws["E6"])
     ws["E6"].number_format = "yyyy-mm-dd"
     label(ws, "D7", "Week Start Equity ($)")
@@ -294,7 +306,7 @@ def build_risk_tracker_sheet(wb: Workbook):
 TRADE_JOURNAL_HEADERS = [
     "Date", "Block Start", "Symbol", "Side", "4H Bias\nConfirmed?", "Fib+VWAP/EMA\nConfluence?",
     "Entry Time", "Entry Price", "Stop Price", "Target Price", "Stop Distance", "R:R at Entry",
-    "Position Size", "Risk $", "Risk % of Equity", "Exit Time", "Exit Price", "Exit Reason",
+    "Position Size\n(coins)", "Risk $", "Risk % of Equity", "Exit Time", "Exit Price", "Exit Reason",
     "Realized P&L $", "R Multiple", "Breakeven\nMoved?", "All Rules\nFollowed?", "Notes",
 ]
 
@@ -360,15 +372,16 @@ def build_trade_journal_sheet(wb: Workbook):
         ws.cell(row=r, column=16).number_format = "hh:mm"
         for col in (8, 9, 10):
             ws.cell(row=r, column=col).number_format = NUM_FMT
+        ws.cell(row=r, column=13).number_format = "#,##0.0000"
         ws.cell(row=r, column=17).number_format = NUM_FMT
 
     # Example row (row 5) with realistic values, clearly marked
     ex = first_data_row
     example = {
-        1: "2026-01-15", 2: "09:30", 3: "AAPL", 4: "Long", 5: "Y", 6: "Y",
-        7: "09:41", 8: 227.40, 9: 226.55, 10: 229.10, 13: 47,
-        16: "10:05", 17: 229.10, 18: "Target", 19: 79.90, 21: "Y", 22: "Y",
-        23: "EXAMPLE ROW - overwrite or delete. Pullback to VWAP + 61.8%, RSI reclaim, vol confirmed.",
+        1: "2026-01-15", 2: "00:00 UTC", 3: "BTCUSDT", 4: "Long", 5: "Y", 6: "Y",
+        7: "00:11", 8: 60420.00, 9: 60120.00, 10: 61020.00, 13: 0.0333,
+        16: "00:35", 17: 61020.00, 18: "Target", 19: 19.98, 21: "Y", 22: "Y",
+        23: "EXAMPLE ROW - overwrite or delete. Pullback to VWAP + 61.8%, RSI reclaim, vol confirmed. Spot, no leverage, reduced size (validation phase).",
     }
     for col, val in example.items():
         ws.cell(row=ex, column=col).value = val
