@@ -54,6 +54,8 @@ showMean      = input.bool(false,      "Show mean", group = GRP_STYLE, inline = 
 meanColor     = input.color(color.new(color.white, 0), "", group = GRP_STYLE, inline = "mean")
 showOutliers  = input.bool(true,       "Show outlier samples (last 500 labels)", group = GRP_STYLE, inline = "o")
 outColor      = input.color(color.new(color.orange, 0), "", group = GRP_STYLE, inline = "o")
+outMarker     = input.string("Dot", "Outlier marker", options = ["Dot", "Small dot", "Tick"], group = GRP_STYLE, inline = "om")
+outSize       = input.string("Tiny", "Size", options = ["Tiny", "Small", "Normal"], group = GRP_STYLE, inline = "om")
 maxDots       = input.int(4,           "Max outlier dots per side per bar", minval = 1, maxval = 20, group = GRP_STYLE)
 showExtremes  = input.bool(true,       "Mark true bar high/low beyond whiskers", group = GRP_STYLE, inline = "x")
 extColor      = input.color(color.new(color.gray, 0), "", group = GRP_STYLE, inline = "x")
@@ -217,6 +219,16 @@ plotchar(medMarker ? med : na, "Median marker", "━", location.absolute, medCol
 plotshape(showMean ? mean : na, "Mean", shape.diamond, location.absolute, meanColor, size = size.tiny)
 
 // Individual outlier samples (deduplicated to the tick).
+// Markers are plain text glyphs (no label bubble) so they stay small and unobtrusive.
+string outGlyph = switch outMarker
+    "Small dot" => "·"
+    "Tick"      => "–"
+    => "•"
+string outSz = switch outSize
+    "Small"  => size.small
+    "Normal" => size.normal
+    => size.tiny
+
 drawDots(array<float> arr, int maxN, color col) =>
     float last = na
     int drawn = 0
@@ -225,7 +237,7 @@ drawDots(array<float> arr, int maxN, color col) =>
             break
         float r = math.round_to_mintick(x)
         if na(last) or r != last
-            label.new(bar_index, r, "", style = label.style_circle, color = col, size = size.tiny, tooltip = str.tostring(r, format.mintick))
+            label.new(bar_index, r, outGlyph, style = label.style_label_center, color = color(na), textcolor = col, size = outSz, tooltip = str.tostring(r, format.mintick))
             last := r
             drawn += 1
 
