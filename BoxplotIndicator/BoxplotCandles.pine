@@ -24,7 +24,7 @@
 // Borders and Wick, or right-click the main series → Hide) so only the
 // boxplots remain.
 // ─────────────────────────────────────────────────────────────────────────────
-indicator("Boxplot Candles", shorttitle = "BoxCandles", overlay = true, max_lines_count = 500, max_labels_count = 500)
+indicator("Boxplot Candles", shorttitle = "BoxCandles", overlay = true, max_labels_count = 500)
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
 GRP_DATA  = "Intrabar data"
@@ -47,9 +47,7 @@ upColor       = input.color(color.new(#26A69A, 0), "Up box",   group = GRP_STYLE
 dnColor       = input.color(color.new(#EF5350, 0), "Down box", group = GRP_STYLE, inline = "c")
 boxTransp     = input.int(60,          "Box fill transparency", minval = 0, maxval = 100, group = GRP_STYLE)
 medColor      = input.color(color.new(color.yellow, 0), "Median", group = GRP_STYLE, inline = "m")
-medWidth      = input.int(2,           "Width", minval = 1, maxval = 5, group = GRP_STYLE, inline = "m")
-medStyle      = input.string("Line (last 500 bars)", "Median display", options = ["Line (last 500 bars)", "Marker (all bars)", "Both"], group = GRP_STYLE)
-medWidthPct   = input.int(70,          "Median line width (% of bar)", minval = 10, maxval = 100, group = GRP_STYLE)
+medThick      = input.float(0.0,       "Thickness (% of box)", minval = 0.0, maxval = 25.0, step = 0.5, group = GRP_STYLE, inline = "m", tooltip = "0 = hairline. Larger values draw the median as a thin solid bar whose height is this % of the box height.")
 showMean      = input.bool(false,      "Show mean", group = GRP_STYLE, inline = "mean")
 meanColor     = input.color(color.new(color.white, 0), "", group = GRP_STYLE, inline = "mean")
 showOutliers  = input.bool(true,       "Show outlier samples (last 500 labels)", group = GRP_STYLE, inline = "o")
@@ -208,13 +206,10 @@ plotcandle(fb ? open : na, fb ? high : na, fb ? low : na, fb ? close : na, "Fall
      color = color.new(baseCol, 85), wickcolor = color.new(baseCol, 70), bordercolor = color.new(baseCol, 70))
 
 // Median as a horizontal bar across the box.
-bool medLine   = medStyle != "Marker (all bars)"
-bool medMarker = medStyle != "Line (last 500 bars)"
-if hasData and medLine
-    int barMs  = na(time_close) ? timeframe.in_seconds() * 1000 : time_close - time
-    int halfMs = int(barMs * medWidthPct / 200.0)
-    line.new(time - halfMs, med, time + halfMs, med, xloc = xloc.bar_time, color = medColor, width = medWidth)
-plotchar(medMarker ? med : na, "Median marker", "━", location.absolute, medColor, size = size.small)
+// Drawn as a second, wickless "candle" whose open and close sit on the median, so
+// it gets exactly the same width and position as the box and scales with zoom.
+float medHalf = (q3 - q1) * medThick / 200.0
+plotcandle(med - medHalf, med + medHalf, med - medHalf, med + medHalf, "Median", color = medColor, wickcolor = color(na), bordercolor = medColor)
 
 plotshape(showMean ? mean : na, "Mean", shape.diamond, location.absolute, meanColor, size = size.tiny)
 
