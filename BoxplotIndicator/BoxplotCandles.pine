@@ -48,7 +48,7 @@ dnColor       = input.color(color.new(#EF5350, 0), "Down box", group = GRP_STYLE
 boxTransp     = input.int(60,          "Box fill transparency", minval = 0, maxval = 100, group = GRP_STYLE)
 medColor      = input.color(color.new(color.yellow, 0), "Median", group = GRP_STYLE, inline = "m")
 medThick      = input.float(0.0,       "Thickness (% of box)", minval = 0.0, maxval = 25.0, step = 0.5, group = GRP_STYLE, inline = "m", tooltip = "0 = hairline. Larger values draw the median as a thin solid bar whose height is this % of the box height.")
-showMean      = input.bool(true,       "Show mean (dashed)", group = GRP_STYLE, inline = "mean")
+showMean      = input.bool(false,      "Show mean (dashed)", group = GRP_STYLE, inline = "mean")
 meanColor     = input.color(color.new(color.white, 0), "", group = GRP_STYLE, inline = "mean")
 meanSize      = input.string("Normal", "Size", options = ["Small", "Normal", "Large", "Huge"], group = GRP_STYLE, inline = "mean", tooltip = "Pine cannot draw a dashed candle body, so the mean is a dashed glyph centred on the bar. Its width is fixed in pixels: pick the size that best matches your box width at your usual zoom.")
 showOutliers  = input.bool(true,       "Show outlier samples (last 500 labels)", group = GRP_STYLE, inline = "o")
