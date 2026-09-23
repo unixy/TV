@@ -43,9 +43,9 @@ Tukey whiskers are available.
   uses weighted percentiles).
 - **Box percentile**: 25 gives the classic 25/75 box; lower values widen it.
 - **Whisker method**: Percentile (default 2 → 2nd/98th), Tukey k×IQR (textbook boxplot), or Min/Max.
-- **Median display**: the horizontal line is a drawing object, so TradingView keeps
-  only the last 500. `Marker` mode shows the median on every bar.
-- Outlier dots are labels and are also capped at the last 500.
+- **Median thickness**: the median is drawn as a flat, wickless candle, so it always
+  matches the box width and position on every bar. 0 = hairline; raise it for a bolder bar.
+- Outlier dots are labels, so TradingView keeps only the last 500.
 
 ## Limitations
 
