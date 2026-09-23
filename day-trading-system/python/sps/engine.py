@@ -63,10 +63,15 @@ class SPSParams:
     max_trades_per_block: int = 2
 
     # Volatility filter. Crypto trades every 5m bar around the clock, so
-    # ~20 calendar days of 5m bars is 20 x 288 = 5760 bars (not ~1500,
+    # ~17 calendar days of 5m bars is 17 x 288 = 4800 bars (not ~1500,
     # which was the equivalent for a market with fixed trading hours).
+    # 4800 (not a rounder ~20-day 5760) matches the Pine scripts' default,
+    # which are hard-capped at 5000 bars by TradingView's ta.percentrank().
+    # This engine has no such limit, so raise it if you want a longer window
+    # for the Python-only backtest - just don't expect the Pine version to
+    # be able to follow past 5000.
     atr_len: int = 14
-    pct_lookback: int = 5760
+    pct_lookback: int = 4800
     low_pctile: float = 10.0
     high_pctile: float = 97.5
 
