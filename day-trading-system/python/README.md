@@ -30,18 +30,41 @@ target/R-multiple), `results/metrics.json`, and `results/equity_curve.png`.
 
 ## Using real data
 
-Get real 5-minute OHLCV bars for a **top-10-by-market-cap coin on a major
-exchange** (spot, e.g. BTC/USDT or ETH/USDT on Binance/Coinbase/Kraken) -
-`ccxt` is the standard library for this. Save as a CSV with columns:
+`fetch_data.py` pulls real 5-minute OHLCV history via `ccxt` and saves it
+in the exact CSV format `run_backtest.py` expects:
+
+```bash
+python fetch_data.py --exchange coinbase --symbol BTC/USD --days 180 --out btc_5m.csv
+python run_backtest.py --csv btc_5m.csv --out-dir results --capital 25000 --risk-pct 0.4 --commission-pct 0.001 --slippage-pct 0.0002
+```
+
+A few things worth knowing about the exchange choice (see also the
+docstring in `fetch_data.py`):
+- **Coinbase is the default** because it pages properly through deep
+  history via `ccxt`'s `since` parameter.
+- **Kraken's public OHLC endpoint only returns its most recent ~720
+  candles**, regardless of `since` - fine for a quick look, useless for
+  pulling 6-12 months of 5m data. `fetch_data.py` will run without
+  erroring against it, but you'll silently get ~2.5 days of bars, not 180
+  days - watch the "Wrote N bars" line at the end and the printed date
+  range to confirm you actually got what you asked for.
+- **Binance's main `api.binance.com` geo-blocks many cloud/US-hosted
+  IPs** (HTTP 451) - try `--exchange binance` if you're running this
+  somewhere that isn't blocked; it's often the deepest and cheapest-fee
+  history if it works for you.
+- 180 days at Coinbase's ~300-bars-per-request limit is several hundred
+  requests - expect it to take a few minutes, not seconds.
+
+Set `--commission-pct` to your actual account's taker fee (spot majors are
+commonly ~0.1% = 0.001, less with a fee-token discount - check your own fee
+tier) rather than trusting the default.
+
+If you already have OHLCV data from somewhere else (a broker export, a
+paid data vendor), you don't need `fetch_data.py` at all - just save it as
+a CSV with columns:
 
 ```
 timestamp,open,high,low,close,volume
-```
-
-Then:
-
-```bash
-python run_backtest.py --csv your_data.csv --out-dir results --capital 25000 --risk-pct 0.4 --commission-pct 0.001 --slippage-pct 0.0002
 ```
 
 Set `--commission-pct` to your actual account's taker fee (spot majors are

@@ -304,7 +304,9 @@ thing on the chart, in the journal, and in the backtester.
 ## 11. Validation path — do this before risking real money
 
 1. **Backtest** (`python/`) over at least 6–12 months of 5-minute data for
-   your instrument, with realistic commission and slippage assumptions - use
+   your instrument - `python/fetch_data.py` pulls this via `ccxt` (Coinbase
+   by default; see its docstring for exchange-specific gotchas) - with
+   realistic commission and slippage assumptions - use
    your actual exchange's taker fee (spot majors are commonly ~0.1% per
    fill, less with a fee-token discount or maker rebate; check your own
    account's tier) rather than the default. Since crypto trades every day,

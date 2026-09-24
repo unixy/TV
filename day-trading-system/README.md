@@ -27,6 +27,7 @@ day-trading-system/
 │   ├── sps/engine.py                            <- feature computation + event-driven backtest (mirrors the Pine strategy bar-for-bar)
 │   ├── sps/indicators.py                        <- EMA/ATR/RSI/pivot/percentrank helpers
 │   ├── run_backtest.py                          <- CLI: CSV in, trade log + equity curve + metrics out
+│   ├── fetch_data.py                            <- pulls real 5m OHLCV via ccxt (Coinbase by default)
 │   ├── make_synthetic_data.py                   <- generates fake data for smoke-testing only (not real market data)
 │   └── README.md                                <- how to run it against real data
 └── spreadsheets/
